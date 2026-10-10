@@ -76,9 +76,20 @@ uintptr_t FindLibBase(const char* lib_name, bool check_slashes) {
 // reading them yields garbage. Everything must come from the *program* headers,
 // which are mapped as part of the first segment.
 
+// ElfW(type) expands to Elf32_type or Elf64_type from the ABI the file is
+// compiled for, so the same parser walks both the 64-bit and the 32-bit
+// liblogic.so without a second code path. The layout differences (program
+// header size, symbol entry size, dynamic entry size) all follow from the
+// macro, which is exactly how the loader itself handles it.
+#if defined(__LP64__)
+#define RAIN_ST_TYPE ELF64_ST_TYPE
+#else
+#define RAIN_ST_TYPE ELF32_ST_TYPE
+#endif
+
 struct DynTable {
     uintptr_t base = 0;
-    const Elf64_Sym* symtab = nullptr;
+    const ElfW(Sym)* symtab = nullptr;
     const char* strtab = nullptr;
     size_t strsz = 0;
     size_t symcount = 0;
@@ -117,12 +128,16 @@ size_t SymCountFromGnuHash(uintptr_t base, uintptr_t gh) {
 }
 
 bool ReadDynamic(uintptr_t base, DynTable* out) {
-    const auto* eh = reinterpret_cast<const Elf64_Ehdr*>(base);
+    const auto* eh = reinterpret_cast<const ElfW(Ehdr)*>(base);
     if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0) return false;
-    if (eh->e_ident[EI_CLASS] != ELFCLASS64) return false;
+    // The class must match the build: a 64-bit library cannot be walked with
+    // 32-bit structs (or vice versa). ElfW is compile-time, so this check is
+    // what rejects a mismatched liblogic.so instead of mis-parsing it.
+    if (eh->e_ident[EI_CLASS] !=
+        (sizeof(void*) == 8 ? ELFCLASS64 : ELFCLASS32)) return false;
     if (!eh->e_phoff || !eh->e_phnum) return false;
 
-    const auto* ph = reinterpret_cast<const Elf64_Phdr*>(base + eh->e_phoff);
+    const auto* ph = reinterpret_cast<const ElfW(Phdr)*>(base + eh->e_phoff);
     uintptr_t dyn = 0;
     size_t dynsz = 0;
     for (int i = 0; i < eh->e_phnum; i++) {
@@ -131,11 +146,11 @@ bool ReadDynamic(uintptr_t base, DynTable* out) {
             dynsz = ph[i].p_memsz;
         }
     }
-    if (!dyn || dynsz < sizeof(Elf64_Dyn)) return false;
+    if (!dyn || dynsz < sizeof(ElfW(Dyn))) return false;
 
     uintptr_t symtab = 0, strtab = 0, strsz = 0, hash = 0, gnuhash = 0;
-    const auto* d = reinterpret_cast<const Elf64_Dyn*>(dyn);
-    for (size_t i = 0; i < dynsz / sizeof(Elf64_Dyn); i++) {
+    const auto* d = reinterpret_cast<const ElfW(Dyn)*>(dyn);
+    for (size_t i = 0; i < dynsz / sizeof(ElfW(Dyn)); i++) {
         if (d[i].d_tag == DT_NULL) break;
         switch (d[i].d_tag) {
             case DT_SYMTAB:   symtab = d[i].d_un.d_ptr; break;
@@ -149,7 +164,7 @@ bool ReadDynamic(uintptr_t base, DynTable* out) {
     if (!symtab || !strtab) return false;
 
     out->base = base;
-    out->symtab = reinterpret_cast<const Elf64_Sym*>(Fixup(symtab, base));
+    out->symtab = reinterpret_cast<const ElfW(Sym)*>(Fixup(symtab, base));
     out->strtab = reinterpret_cast<const char*>(Fixup(strtab, base));
     out->strsz = strsz ? strsz : (1u << 20);
 
@@ -162,7 +177,7 @@ bool ReadDynamic(uintptr_t base, DynTable* out) {
         out->symcount = 0;
     }
     if (out->symcount == 0 || out->symcount > (1u << 22)) {
-        out->symcount = out->strsz / sizeof(Elf64_Sym);
+        out->symcount = out->strsz / sizeof(ElfW(Sym));
         if (out->symcount == 0) out->symcount = 4096;
     }
     return true;
@@ -181,9 +196,9 @@ void* SymbolFromBase(uintptr_t base, const char* name) {
         if (!g_dyn_ready) return nullptr;
     }
     for (size_t i = 0; i < g_dyn.symcount; i++) {
-        const Elf64_Sym& s = g_dyn.symtab[i];
+        const ElfW(Sym)& s = g_dyn.symtab[i];
         if (!s.st_name || !s.st_value) continue;
-        if (ELF64_ST_TYPE(s.st_info) != STT_FUNC) continue;
+        if (RAIN_ST_TYPE(s.st_info) != STT_FUNC) continue;
         if (s.st_name >= g_dyn.strsz) continue;
         if (strcmp(g_dyn.strtab + s.st_name, name) != 0) continue;
         return reinterpret_cast<void*>(base + s.st_value);

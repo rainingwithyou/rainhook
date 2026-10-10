@@ -55,9 +55,13 @@ int g_touch_n = 0;
 int g_ignored_finger = -1;   // the aura's synthesized hold, hidden from ImGui
 
 // il2cpp_runtime_invoke boxes value-type results: the returned pointer is an
-// Il2CppObject whose 16-byte header precedes the payload. Reading at offset 0
-// yields the object's class pointer, not the value.
+// Il2CppObject whose header precedes the payload. The header is two pointers
+// ([klass][monitor]), so the payload offset is 16 on 64-bit and 8 on 32-bit.
+#if defined(__LP64__)
 static constexpr size_t kBoxedPayload = 0x10;
+#else
+static constexpr size_t kBoxedPayload = 0x08;
+#endif
 
 int InvokeInt(const MethodInfo* m, void* obj, void** params = nullptr) {
     Il2CppObject* exc = nullptr;

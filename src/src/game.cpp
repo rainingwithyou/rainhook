@@ -640,7 +640,9 @@ bool InvokeMatrix(const MethodInfo* m, void* obj, Mat4* out) {
     void* r = api.runtime_invoke(m, obj, nullptr, &exc);
     if (!r || exc) return false;
 
-    const float* f = reinterpret_cast<const float*>(reinterpret_cast<uintptr_t>(r) + 0x10);
+    // The boxed return's header is two pointers; the Matrix4x4 payload
+    // follows. kObjHeader is the arch-correct header size.
+    const float* f = reinterpret_cast<const float*>(reinterpret_cast<uintptr_t>(r) + kObjHeader);
     for (int i = 0; i < 16; i++) {
         if (!(f[i] == f[i]) || f[i] > 1e12f || f[i] < -1e12f) return false;
     }
@@ -1777,10 +1779,10 @@ bool PeekSpellCD(void* cd, SpellCD* out) {
     alignas(16) uint8_t buf[256];
     if (!SafePeek(cd, sizeof(buf), buf)) return false;
 
-    out->spell_id = Read<int32_t>(buf, 0x10);          // iSpellID (after header)
-    const int32_t cool = Read<int32_t>(buf, 0x14);     // uiCoolTime
-    const int32_t maxcd = Read<int32_t>(buf, 0x18);    // originalMaxCdTime
-    out->active = Read<uint8_t>(buf, 0x20) != 0;       // m_isCoolDown
+    out->spell_id = Read<int32_t>(buf, kObjHeader + 0x00);  // iSpellID (after header)
+    const int32_t cool = Read<int32_t>(buf, kObjHeader + 0x04);   // uiCoolTime
+    const int32_t maxcd = Read<int32_t>(buf, kObjHeader + 0x08);  // originalMaxCdTime
+    out->active = Read<uint8_t>(buf, kObjHeader + 0x10) != 0;     // m_isCoolDown
 
     // Wall-clock stamps (epoch-scale) are not remaining times — skip until a
     // live match calibrates the semantics.
@@ -1796,13 +1798,13 @@ int SnapshotSpellCDs(const Entity& e, SpellCD* out, int max) {
     if (!PeekEntity(e.obj, buf)) return 0;
     void* comp = Read<void*>(buf, F.cool_comp.offset);
     if (!PtrOk(reinterpret_cast<uintptr_t>(comp))) return 0;
-    // ShowCoolDownComp fields: _pOwner(0), _dicCD(1), _dicSkillCnf(2) — the
-    // dictionary lands at 0x18 (after _pOwner). Try it first; fall back to a
-    // probe of the first pointer slots for field movement between builds.
+    // ShowCoolDownComp fields: _pOwner(0), _dicCD(1), _dicSkillCnf(2). The
+    // dictionary is expected in slot 1; probe it first, then the neighbouring
+    // slots for field movement between builds. PtrSlot is arch-correct.
     alignas(16) uint8_t cbuf[128];
     if (!SafePeek(comp, sizeof(cbuf), cbuf)) return 0;
     int n = 0;
-    for (size_t off : {0x18, 0x10, 0x20, 0x28, 0x30, 0x38}) {
+    for (size_t off : {PtrSlot(1), PtrSlot(0), PtrSlot(2), PtrSlot(3), PtrSlot(4), PtrSlot(5)}) {
         void* cand = Read<void*>(cbuf, off);
         if (!cand || !PtrOk(reinterpret_cast<uintptr_t>(cand))) continue;
         n = il2cpp::DictEach(cand, [&](int32_t key, void* val) {
@@ -1848,11 +1850,12 @@ int SkillSlotSpellId(const Entity& self, int slot) {
     void* comp = Read<void*>(buf, f_comp.offset);
     if (!PtrOk(reinterpret_cast<uintptr_t>(comp))) return 0;
 
-    // OwnSkillComp: OwnSkillDict at index 1 -> 0x18 after the header, same
-    // layout family as the cooldown dictionary. Probe a couple of slots.
+    // OwnSkillComp: OwnSkillDict at index 1 -> the second pointer slot after
+    // the header, same layout family as the cooldown dictionary. Probe a
+    // couple of slots (arch-correct via PtrSlot).
     alignas(16) uint8_t cbuf[160];
     if (!SafePeek(comp, sizeof(cbuf), cbuf)) return 0;
-    for (size_t off : {0x18, 0x10, 0x20, 0x28}) {
+    for (size_t off : {PtrSlot(1), PtrSlot(0), PtrSlot(2), PtrSlot(3)}) {
         void* dict = Read<void*>(cbuf, off);
         if (!dict || !PtrOk(reinterpret_cast<uintptr_t>(dict))) continue;
         int found = 0;
@@ -1860,9 +1863,10 @@ int SkillSlotSpellId(const Entity& self, int slot) {
             if (found || !val || !PtrOk(reinterpret_cast<uintptr_t>(val))) return;
             alignas(16) uint8_t sbuf[256];
             if (!SafePeek(val, sizeof(sbuf), sbuf)) return;
-            // OwnSkillData: m_iSpellID at 0x10, m_iUseIndex at 0x10 + 10*4.
-            const int32_t spell = Read<int32_t>(sbuf, 0x10);
-            const int32_t use_index = Read<int32_t>(sbuf, 0x38);
+            // OwnSkillData: m_iSpellID at the payload start (after the header),
+            // m_iUseIndex ten ints later.
+            const int32_t spell = Read<int32_t>(sbuf, kObjHeader + 0x00);
+            const int32_t use_index = Read<int32_t>(sbuf, kObjHeader + 0x28);
             // UseIndex 1..3 are the three hero skills; 0 is the basic attack.
             if (use_index == slot + 1 && spell > 0) found = spell;
         });

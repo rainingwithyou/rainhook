@@ -67,9 +67,23 @@ target_include_directories(rain PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
+# GlossHook ships static libs for ARM (32-bit) and ARM64 only — it has no x86
+# backend (its header hard-errors on other architectures). Select the right one
+# per ABI so both supported targets build from the same tree.
+set(GLOSSHOOK_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/GlossHook/GlossHook/lib")
+if(ANDROID_ABI STREQUAL "armeabi-v7a")
+    set(GLOSSHOOK_LIB "${GLOSSHOOK_ROOT}/ARM/libGlossHook.a")
+elseif(ANDROID_ABI STREQUAL "arm64-v8a")
+    set(GLOSSHOOK_LIB "${GLOSSHOOK_ROOT}/ARM64/libGlossHook.a")
+else()
+    message(FATAL_ERROR
+        "Rain only builds for armeabi-v7a and arm64-v8a: the GlossHook hook "
+        "backend is ARM-only, and MLBB ships only arm64-v8a. Requested: ${ANDROID_ABI}")
+endif()
+
 target_link_libraries(rain
     log android EGL GLESv3
-    "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/GlossHook/GlossHook/lib/ARM64/libGlossHook.a"
+    "${GLOSSHOOK_LIB}"
     dl
 )
 

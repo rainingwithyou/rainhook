@@ -108,21 +108,41 @@ inline void Write(void* base, size_t off, T v) {
 }
 
 inline bool PlausiblePtr(uintptr_t p) {
-    // Guest ARM heap and image mappings on this emulator sit well below the
-    // 47-bit userspace ceiling; reject nulls, small ints and kernel-ish range.
+    // Reject nulls, small ints and kernel-ish range. The ceiling is the
+    // userspace pointer limit for the ABI: 47 bits on 64-bit, the full
+    // 32-bit space minus the kernel half on 32-bit.
+#if defined(__LP64__)
     return p > 0x10000 && p < 0x0000800000000000ULL;
+#else
+    return p > 0x10000;
+#endif
 }
 
 // IL2CPP object header: [klass][monitor]. Managed arrays add [bounds][length].
+// Both entries are pointers, so the header is 16 bytes on 64-bit and 8 on
+// 32-bit — every field offset below shifts with it.
+#if defined(__LP64__)
 static constexpr size_t kObjHeader = 0x10;
-static constexpr size_t kArrayHeader = 0x20;
-static constexpr size_t kListItems = 0x10;  // List<T>._items
-static constexpr size_t kListSize = 0x18;   // List<T>._size
+static constexpr size_t kArrayHeader = 0x20;  // + [bounds][length], 8-byte aligned
+#else
+static constexpr size_t kObjHeader = 0x08;
+static constexpr size_t kArrayHeader = 0x10;  // + [bounds][length], 4-byte aligned
+#endif
+static constexpr size_t kListItems = kObjHeader;             // List<T>._items
+static constexpr size_t kListSize = kObjHeader + sizeof(void*);  // List<T>._size
+
+// The k-th pointer-sized slot after the object header. Managed fields that
+// hold references are laid out as consecutive pointer slots, so this is how
+// the dictionary probes address them on either ABI.
+static constexpr size_t PtrSlot(int k) {
+    return kObjHeader + static_cast<size_t>(k) * sizeof(void*);
+}
 
 inline Il2CppArray* AsArray(void* p) { return reinterpret_cast<Il2CppArray*>(p); }
 
 inline int32_t ArrayLength(void* arr) {
-    return Read<int32_t>(arr, kObjHeader + 0x08);
+    // length follows [klass][monitor][bounds]; bounds is a pointer.
+    return Read<int32_t>(arr, kObjHeader + sizeof(void*));
 }
 
 inline void* ArrayData(void* arr) {
@@ -130,18 +150,14 @@ inline void* ArrayData(void* arr) {
 }
 
 // Managed Dictionary<TKey, TValue>. IL2CPP lays Dictionary out as
-// [header][buckets][entries][count][version][freeList][freeCount]... on 64-bit:
-//   0x10 buckets   (int[] array)
-//   0x18 entries   (Entry[] array)
-//   0x20 count     (int)
-//   0x28 version   (int)
-//   0x30 freeList  (int)
-//   0x38 freeCount (int)
-// Entry is a struct {int hashCode; int next; TKey key; TValue value} — stride
-// depends on TKey/TValue (both 4-byte ints here: 16 bytes, value at +8).
-static constexpr size_t kDictBuckets = 0x10;
-static constexpr size_t kDictEntries = 0x18;
-static constexpr size_t kDictCount = 0x20;
+// [header][buckets][entries][count][version][freeList][freeCount]...
+// buckets/entries are pointers (8 bytes each on 64-bit, 4 on 32-bit); the
+// trailing fields are ints. Entry is a struct
+// {int hashCode; int next; TKey key; TValue value} — stride depends on
+// TKey/TValue (both 4-byte ints here: 16 bytes, value at +8).
+static constexpr size_t kDictBuckets = kObjHeader;
+static constexpr size_t kDictEntries = kObjHeader + sizeof(void*);
+static constexpr size_t kDictCount = kObjHeader + 2 * sizeof(void*);
 
 // Iterate an int-keyed dictionary of reference values. Calls fn(key, value)
 // for every live entry; free slots (hashCode < 0) are skipped. Returns the
