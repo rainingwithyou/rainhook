@@ -120,6 +120,7 @@ JDK and the SDK's `d8`).
 
 | Document | Contents |
 |---|---|
+| [`TUTORIAL.md`](TUTORIAL.md) | **step-by-step deployment guide** |
 | `docs/RAIN.md` | build, deploy, feature reference |
 | `docs/MLBB-INTERNALS.md` | game module layout, metadata format, entity model |
 | `docs/CONFIG-SYSTEM.md` | JSON config profiles |
@@ -127,6 +128,20 @@ JDK and the SDK's `d8`).
 | `docs/DEEP-ANALYSIS-*.md` | reverse-engineering rounds |
 | `docs/VYNIX-ANALYSIS.md` | reference implementation analysis |
 | `docs/TOUCH-FIX-MIUI-GESTURES.md` | MIUI gesture-zone interference fix |
+
+## Quick start
+
+See [`TUTORIAL.md`](TUTORIAL.md) for the full walkthrough. The short version:
+
+```bash
+GAMEDIR=/sdcard/Android/data/com.mobile.legends/files/dragon2017/assets/comlibs/arm64-v8a
+adb shell "cp $GAMEDIR/librudp.bytes /sdcard/Download/librudp.original.bytes"  # back up
+adb push librain-arm64-v8a.so /sdcard/Download/rain.so
+adb shell "am force-stop com.mobile.legends"
+adb shell "cp /sdcard/Download/rain.so $GAMEDIR/librudp.bytes"
+```
+
+Launch the game. Restore with the backup file whenever you want.
 
 ## Requirements
 
