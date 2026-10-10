@@ -1,0 +1,34 @@
+# ---- generated / heavy ----
+build/
+analysis/
+refs/
+tools/
+
+# ---- vendor sample binaries (not ours to redistribute) ----
+VYNIX LIB TRIAL/
+VYNIX TRIALL/
+XNISH NEW/
+*.zip
+
+# ---- device / game artifacts ----
+*.apk
+*.apks
+*.dex.bak
+
+# ---- workspace config ----
+.zcode/
+.zcodeignore
+AGENTS.md
+opencode.jsonc
+nul
+
+# ---- host tooling ----
+adb.exe
+AdbWinApi.dll
+AdbWinUsbApi.dll
+
+# ---- OS noise ----
+Thumbs.db
+desktop.ini
+.DS_Store
+__MACOSX/
