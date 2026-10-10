@@ -9,6 +9,9 @@ loads it — so once the file is in place, Rain comes up with the game.
 **No root required** for the standard method. **No permanent modification** —
 the original file is restored with one command.
 
+> **No computer?** See [`TUTORIAL-NO-PC.md`](TUTORIAL-NO-PC.md) — the same
+> deployment done entirely from the phone with a file manager.
+
 ---
 
 ## 1. What you need

@@ -120,7 +120,8 @@ JDK and the SDK's `d8`).
 
 | Document | Contents |
 |---|---|
-| [`TUTORIAL.md`](TUTORIAL.md) | **step-by-step deployment guide** |
+| [`TUTORIAL.md`](TUTORIAL.md) | **deployment with a computer (ADB)** |
+| [`TUTORIAL-NO-PC.md`](TUTORIAL-NO-PC.md) | **deployment with only the phone** (file manager) |
 | `docs/RAIN.md` | build, deploy, feature reference |
 | `docs/MLBB-INTERNALS.md` | game module layout, metadata format, entity model |
 | `docs/CONFIG-SYSTEM.md` | JSON config profiles |
@@ -131,7 +132,7 @@ JDK and the SDK's `d8`).
 
 ## Quick start
 
-See [`TUTORIAL.md`](TUTORIAL.md) for the full walkthrough. The short version:
+**With a computer:** see [`TUTORIAL.md`](TUTORIAL.md).
 
 ```bash
 GAMEDIR=/sdcard/Android/data/com.mobile.legends/files/dragon2017/assets/comlibs/arm64-v8a
@@ -140,6 +141,11 @@ adb push librain-arm64-v8a.so /sdcard/Download/rain.so
 adb shell "am force-stop com.mobile.legends"
 adb shell "cp /sdcard/Download/rain.so $GAMEDIR/librudp.bytes"
 ```
+
+**Phone only:** see [`TUTORIAL-NO-PC.md`](TUTORIAL-NO-PC.md). Install
+ZArchiver, download `librudp-arm64.bytes` from the releases page, and copy it
+into the game's `comlibs/arm64-v8a/` folder (replacing the existing
+`librudp.bytes` after backing it up).
 
 Launch the game. Restore with the backup file whenever you want.
 
