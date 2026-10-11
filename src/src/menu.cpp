@@ -1117,7 +1117,8 @@ void Draw() {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
     ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.55f, 0.95f, 0.55f));
-    ImGui::Begin("Rain##main", &g_cfg.menu_open, ImGuiWindowFlags_NoSavedSettings);
+    ImGui::Begin("@rainhook | Hooking with You <3##main", &g_cfg.menu_open,
+                 ImGuiWindowFlags_NoSavedSettings);
 
     // Keep the title bar reachable: a drag that ends past an edge used to leave
     // the window off-screen with no way back.
