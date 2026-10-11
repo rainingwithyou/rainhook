@@ -17,7 +17,10 @@ endif()
 
 # Keep the output lean: game processes are sensitive to lib size, and a stripped
 # BIND_NOW .so matches how the reference implementation is built.
-set(CMAKE_CXX_FLAGS_RELEASE "-O2 -fvisibility=hidden -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti -static-libstdc++")
+# -DNDEBUG matters for correctness, not just size: without it ImGui's IM_ASSERT
+# stays live and any contract violation aborts the game process (the shipped
+# binary previously imported __assert2 and carried 184 assert strings).
+set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG -fvisibility=hidden -ffunction-sections -fdata-sections -fno-exceptions -fno-rtti -static-libstdc++")
 set(CMAKE_SHARED_LINKER_FLAGS "-Wl,--gc-sections -Wl,-z,now -Wl,-z,max-page-size=16384 -Wl,--exclude-libs,ALL -static-libstdc++")
 
 add_compile_definitions(

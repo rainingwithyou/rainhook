@@ -1,125 +1,151 @@
-# Account Reset — what it does, and its hard limit (2026-10-11)
+# Account Reset — Reset Guest (2026-10-12)
 
-**Feature:** Settings → Account → **Reset Account**. Removes the local login
-and session files so the game starts without them.
+**Feature:** Settings → Account → **Reset Guest**. Replaces the stored device
+identity, wipes the local login caches, and restarts the game as a fresh guest.
 
-**Limit, proven by experiment:** it does **not** return the game to the login
-page on this device, and it cannot remove a ban. The account is anchored to
-the device's Android ID, which survives everything short of a factory reset.
-The game re-authenticates with that identity and reaches the same account.
+**Verified live:** from the ban screen (Role ID 994207246, 10947h remaining) to
+the **Create Character** page in one reset. The old identity does not come
+back.
 
-This document records the experiment, because the result is counter-intuitive
-and worth not re-deriving.
+This document supersedes the 2026-10-11 experiment, which concluded a reset
+"cannot" change the account. That conclusion was wrong — it was drawn from a
+method that deleted files without changing the identity they were keyed to.
+The correct target is the *stored* device ID, and the reference
+implementation's **Reset Guest** feature pointed at it.
 
 ---
 
-## What the feature does
+## The method (reverse-engineered from VYNIX TRIALL)
 
-Removes four to six files that make up the *local* session state:
-
-| Path | What it is |
-|---|---|
-| `…/dragon2017/login_data/` | the login SDK's cache (`native_login`, `login_auth_cache`, prefs) |
-| `…/dragon2017/newbieofflineData/` | the offline identity assigned before login |
-| `/data/data/com.mobile.legends/shared_prefs/com.mobile.legends.v2.playerprefs.xml` | Unity PlayerPrefs — the game's own prefs |
-| `/data/data/com.mobile.legends/shared_prefs/__SharedPreference__.xml` | the SDK wrapper's prefs |
-| `…/shared_prefs/ug_install_settings_pref.xml` | SDK install identity |
-| `…/shared_prefs/snssdk_openudid.xml` | SDK openudid |
-
-It runs **inside the game's process as the game's own UID**, so it reaches
-`/data/data/com.mobile.legends/` without root — the private directory that
-`adb shell` cannot touch on a non-debuggable package.
-
-Deliberately **not** removed: `assets/` (game content), `assets/comlibs/`
-(where Rain lives), `databases/` and the rest of `shared_prefs/` (third-party
-SDK state), and Rain's own `rain_configs/`.
-
-## The experiment
-
-Three escalating wipes, each followed by a fresh launch:
-
-| What was cleared | Result |
-|---|---|
-| **1. The Reset Account button** (4 files, verified removed in the log) | Ban screen returned. `login_data/` was **regenerated** at launch, `playerprefs.xml` shrank 11811 → 5106 bytes, `newbieofflineData/` stayed gone. |
-| **2. `pm clear com.mobile.legends`** (the system's *full* data wipe — every private file, every database, every cache) | **Ban screen returned anyway.** Role ID unchanged: `994207246`. |
-| **3. App reinstall** (done by the user before this work) | Ban screen returned. |
-
-Three wipes at three levels of severity, same result each time. The session is
-not what produces the ban screen.
-
-## Why
-
-MLBB's login SDK derives the account from the **device's Android ID**:
+The login SDK persists its device identity inside the game's Unity PlayerPrefs
+XML under a key family:
 
 ```
-adb shell settings get secure android_id
-7d193bdedf41f08d          # unchanged across reinstall and pm clear
+JsonDeviceID            (84-char value, e.g. cd9e459e…-…)
+__Java_JsonDeviceID__   (the Java-layer mirror of the same value)
 ```
 
-On Android 8+, the Android ID is derived from the device **and the app's
-signing key**, and it is a system-level setting:
+The guest account is keyed to that **stored** value. The SDK trusts a present
+value over re-deriving one from hardware identifiers — so replacing the value
+is what changes the account, and deleting everything *around* it does nothing.
 
-- it is not in the app's data directory, so `pm clear` does not touch it
-- it is not reset by reinstalling the app
-- it cannot be written without root (it lives in the system settings provider)
+The reference implementation's reset does three things, in this order:
 
-At launch the game reads it, authenticates to the server, is told the account
-for that identity is banned, and shows the ban dialog. Clearing local files
-just means the game rebuilds them from the same identity.
+1. **Backup** the prefs + login caches.
+2. **Replace** every device-id value in the PlayerPrefs XML with a fresh
+   random value in the same 84-char shape (56-4-4-4-12 hex groups).
+3. **SIGKILL the process.** This is not optional: Unity holds PlayerPrefs in
+   memory and flushes them on a clean exit. A normal quit writes the old
+   identity straight back over the surgery.
 
-**A ban is server-side.** It is attached to the account, not the device's
-files, and it follows the account wherever it is signed in. No amount of local
-state removal changes a record on the publisher's servers.
+Rain implements all three (`src/src/account.cpp`). The live log:
 
-## So what is it good for?
+```
+account: key 'JsonDeviceID' = 'cd9e459e…' (84 chars)
+account: key '__Java_JsonDeviceID__' = 'cd9e459e…' (84 chars)
+account: backup -> …/rain_account_backup/20261011-231437 (6 item(s))
+account: com.mobile.legends.v2.playerprefs.xml: JsonDeviceID ('cd9e459e…', 84 chars -> '3db7f856…')
+account: com.mobile.legends.v2.playerprefs.xml: __Java_JsonDeviceID__ ('cd9e459e…', 84 chars -> '3db7f856…')
+account: removed …/login_data  (login cache)
+account: removed …/newbieofflineData  (offline account identity)
+account: removed …/ug_install_settings_pref.xml  (SDK install identity)
+account: removed …/snssdk_openudid.xml  (SDK openudid)
+account: reset -> New guest identity 3db7f856…, 2 id key(s) replaced, 4 item(s) removed, 0 failed.
+account: killing pid=11670 so the old identity cannot be flushed back
+```
 
-Still useful, in the cases where local state *is* the problem:
+Next launch: **Buat Karakter** (Create Character), auto-name `Kaio.Mike~28`,
+with **Ganti Akun** (Switch Account) available at the bottom.
 
-* a **stale or corrupted session** — a login that hangs, loops, or returns an
-  error the game will not clear by itself
-* **before signing in as a different account** — clears the cached session so
-  the switch is clean rather than fighting a remembered login
-* **handing the device over** — the local session token is gone from the
-  device's storage (note: the Android ID link remains)
+## What the old experiment got wrong
 
-## The three ways to actually change account identity
+The 2026-10-11 pass tried three escalating *file* wipes and concluded the
+identity was unreachable without root:
 
-1. **Sign in with a different account** through the game's own account switch.
-   This is the supported path and the only one that works from the app.
-2. **Factory reset the device.** Produces a new Android ID, so the login SDK
-   sees a new identity. Heavy, and it costs everything else on the phone.
-3. **Root, and change `android_id`.** Direct and reversible, but needs root —
-   and the device in question does not have it.
+| What was cleared | Result | Why it failed |
+|---|---|---|
+| Reset Account button (4 files) | Ban screen | Files deleted, identity value untouched — SDK rebuilt them |
+| `pm clear com.mobile.legends` | Ban screen | Same: the identity value is in the wiped data, but re-derived from hardware on next launch |
+| App reinstall | Ban screen | Same |
 
-None of these remove a ban from an account that has one. A ban expires on the
-publisher's schedule or not at all; a different identity means a different
-account, starting over.
+The conclusion "the SDK derives the account from Android ID" was an inference
+from those failures. The actual mechanism is subtler: the SDK stores a device
+ID it computes *partly* from hardware, and trusts the stored copy when one
+exists. Delete the copy and it re-derives (same account); **replace** the copy
+and it uses the new value (different account). The Android ID is an input to
+the derivation, not the identity itself.
 
-## What was verified vs. assumed
+## The limit that remains true
 
-**Verified on device:**
-- the reset removes exactly the listed files, confirmed by the log
-- the private directory is reachable from inside the game process (20
-  shared_prefs, 8 databases, 16 files listed by the diagnostic)
-- the files are regenerated at the next launch
-- `pm clear` — the most thorough wipe the system offers — does not clear the
-  ban screen
-- the Android ID is unchanged across reinstall and `pm clear`
+**This does not un-ban an account.** It gives the device a *new* guest
+identity. The banned account still exists on the publisher's servers and still
+has its ban; you are simply not signing in as it any more. The UI says so:
 
-**Assumed, not verified:** that the login SDK uses the Android ID as its
-primary identity. The evidence is strong (three wipes, same account) but the
-SDK's internals were not read. It could be a different device-stable value
-with the same properties; the practical conclusion is identical either way.
+> Resets the stored guest identity: every device-ID key in the game's
+> preferences is replaced with a fresh value, and the login caches are
+> removed. The game restarts as a new guest and reaches the login page.
+>
+> The process is killed at the end of the reset - that is deliberate.
+>
+> Limit, stated plainly: this does not un-ban an account. A ban is
+> server-side; a fresh guest identity is a different account, not a cleared
+> one.
+
+## What the reset touches
+
+| Path | Action |
+|---|---|
+| `…/shared_prefs/com.mobile.legends.v2.playerprefs.xml` | device-id values **replaced**, file kept |
+| `…/shared_prefs/__SharedPreference__.xml` | scanned; edited only if it carries id keys |
+| `…/dragon2017/login_data/` | removed |
+| `…/dragon2017/newbieofflineData/` | removed |
+| `…/shared_prefs/ug_install_settings_pref.xml` | removed |
+| `…/shared_prefs/snssdk_openudid.xml` | removed |
+
+Backup of everything touched → `files/rain_account_backup/<timestamp>/`
+(6 items on the verified run), readable over ADB or any file manager.
+
+Deliberately untouched: `assets/` (game content), `assets/comlibs/` (where
+Rain lives), the rest of `shared_prefs/` (third-party SDK state), Rain's own
+`rain_configs/`.
+
+## Why the identity is reachable at all
+
+The reset runs **inside the game's process as the game's own UID**. That is
+what makes `/data/data/com.mobile.legends/` writable without root — the
+private directory `adb shell` cannot touch on a non-debuggable package. This
+is also why the same trick is not available from outside the process.
+
+## Restore
+
+The backup is a plain directory copy. To restore the previous identity, stop
+the game and copy `rain_account_backup/<stamp>/com.mobile.legends.v2.playerprefs.xml`
+back over the live file (plus the `login_data/` tree if wanted), then launch.
+The identity value is the only thing that has to go back; the caches
+regenerate.
+
+## Verification log
+
+- Live: ban screen → reset → **Create Character** (`Kaio.Mike~28`), Role ID
+  gone, `Ganti Akun` present. 2026-10-11 23:14.
+- Identity swap confirmed in the log for both keys, correct 84-char format.
+- Backup verified on disk: `rain_account_backup/20261011-231437/` with all
+  six items.
+- Reboot-persistence: the new guest survived relaunch (the create-character
+  screen is the post-reset state, not an error page).
 
 ## UI wording
 
-The Settings tab states the limit plainly rather than implying the button will
-get around a ban:
+The Settings tab states what it does and does not do:
 
-> Removes the local login and session files so the game starts without them.
+> Resets the stored guest identity: every device-ID key in the game's
+> preferences is replaced with a fresh value, and the login caches are
+> removed. The game restarts as a new guest and reaches the login page.
 >
-> Limits, so this is not oversold: MLBB derives the account from the device's
-> Android ID, which is a system setting that survives an app reinstall and
-> cannot be changed without root. The game will re-authenticate with that
-> identity and can reach the same account. A ban is server-side and follows
-> the account, so this does not remove one.
+> The process is killed at the end of the reset - that is deliberate. Unity
+> flushes its preferences on a clean exit, which would write the old identity
+> back. A full backup goes to rain_account_backup/ first.
+>
+> Limit, stated plainly: this does not un-ban an account. A ban is
+> server-side; a fresh guest identity is a different account, not a cleared
+> one.

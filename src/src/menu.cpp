@@ -934,32 +934,33 @@ void TabSettings() {
 
     ImGui::SeparatorText("Account");
     ImGui::TextWrapped(
-        "Removes the local login and session files so the game starts without "
-        "them. Use it to clear a cached session, or before signing in as a "
-        "different account.");
+        "Resets the stored guest identity: every device-ID key in the game's "
+        "preferences is replaced with a fresh value, and the login caches are "
+        "removed. The game restarts as a new guest and reaches the login page.");
     ImGui::TextWrapped(
-        "Limits, so this is not oversold: MLBB derives the account from the "
-        "device's Android ID, which is a system setting that survives an app "
-        "reinstall and cannot be changed without root. The game will "
-        "re-authenticate with that identity and can reach the same account. "
-        "A ban is server-side and follows the account, so this does not "
-        "remove one.");
+        "The process is killed at the end of the reset - that is deliberate. "
+        "Unity flushes its preferences on a clean exit, which would write the "
+        "old identity back. A full backup goes to rain_account_backup/ first.");
+    ImGui::TextWrapped(
+        "Limit, stated plainly: this does not un-ban an account. A ban is "
+        "server-side; a fresh guest identity is a different account, not a "
+        "cleared one.");
 
     // Two-step: a single tap must never wipe state.
     static bool confirm_reset = false;
     if (!confirm_reset) {
-        if (ImGui::Button("Reset Account")) confirm_reset = true;
+        if (ImGui::Button("Reset Guest")) confirm_reset = true;
     } else {
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.15f, 0.15f, 1.0f));
-        if (ImGui::Button("Confirm: erase login data")) {
+        if (ImGui::Button("Confirm: reset identity + wipe login")) {
             account::Reset();
             confirm_reset = false;
         }
         ImGui::PopStyleColor();
         ImGui::SameLine();
         if (ImGui::Button("Cancel")) confirm_reset = false;
-        ImGui::TextDisabled("Restart the game afterwards - it holds the old "
-                            "session in memory until it exits.");
+        ImGui::TextDisabled("The game closes itself when the reset completes. "
+                            "Relaunch it and sign in.");
     }
     if (strcmp(account::LastResult(), "not attempted") != 0) {
         ImGui::TextWrapped("%s", account::LastResult());
