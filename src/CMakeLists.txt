@@ -53,6 +53,7 @@ add_library(rain SHARED
     src/synth.cpp
     src/persist.cpp
     src/cfgjson.cpp
+    src/account.cpp
     src/notify.cpp
     src/icons.cpp
     src/autox.cpp

@@ -9,6 +9,7 @@
 #include <imgui.h>
 
 #include "autox.h"
+#include "account.h"
 #include "cfgjson.h"
 #include "config.h"
 #include "game.h"
@@ -930,6 +931,39 @@ void TabSettings() {
     ImGui::SeparatorText("Touch");
     if (ImGui::Button("Release all touches")) autox::ReleaseAll();
     ImGui::TextDisabled("Emergency release if a synthesized press ever sticks.");
+
+    ImGui::SeparatorText("Account");
+    ImGui::TextWrapped(
+        "Removes the local login and session files so the game starts without "
+        "them. Use it to clear a cached session, or before signing in as a "
+        "different account.");
+    ImGui::TextWrapped(
+        "Limits, so this is not oversold: MLBB derives the account from the "
+        "device's Android ID, which is a system setting that survives an app "
+        "reinstall and cannot be changed without root. The game will "
+        "re-authenticate with that identity and can reach the same account. "
+        "A ban is server-side and follows the account, so this does not "
+        "remove one.");
+
+    // Two-step: a single tap must never wipe state.
+    static bool confirm_reset = false;
+    if (!confirm_reset) {
+        if (ImGui::Button("Reset Account")) confirm_reset = true;
+    } else {
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.55f, 0.15f, 0.15f, 1.0f));
+        if (ImGui::Button("Confirm: erase login data")) {
+            account::Reset();
+            confirm_reset = false;
+        }
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) confirm_reset = false;
+        ImGui::TextDisabled("Restart the game afterwards - it holds the old "
+                            "session in memory until it exits.");
+    }
+    if (strcmp(account::LastResult(), "not attempted") != 0) {
+        ImGui::TextWrapped("%s", account::LastResult());
+    }
 
     ImGui::SeparatorText("About");
     ImGui::TextWrapped(

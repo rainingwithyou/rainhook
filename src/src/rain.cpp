@@ -26,6 +26,7 @@
 #include <cstdio>
 
 #include "il2cpp.h"
+#include "account.h"
 #include "config.h"
 #include "game.h"
 #include "notify.h"
@@ -65,6 +66,11 @@ void* Boot(void*) {
     // Restore the saved config once the JVM bridge can resolve; the load is
     // best-effort and retries are unnecessary (Load marks itself done).
     persist::Load(g_cfg);
+
+    // Report the local account state once, so every session's log carries a
+    // picture of what exists (useful when a ban screen is what prompted the
+    // session in the first place).
+    account::Diagnose();
 
     // Install the notification toggle. The class loader was captured in
     // JNI_OnLoad; this needs the game's activity, so it polls briefly.
