@@ -308,6 +308,7 @@ std::string Emit(const Config& c) {
         KO("menu", Obj(1, {
             KB("watermark", c.watermark),
             KF("ui_scale", c.ui_scale),
+            KF("launcher_scale", c.launcher_scale),
         })),
     };
     return Obj(0, root);
@@ -673,6 +674,7 @@ void Apply(const Val& root, Config& c) {
     if (const Val* mn = root.find("menu")) {
         GB(mn, "watermark", c.watermark);
         GF(mn, "ui_scale", c.ui_scale);
+        GF(mn, "launcher_scale", c.launcher_scale);
     }
 }
 

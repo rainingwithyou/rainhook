@@ -835,6 +835,12 @@ void TabSettings() {
 
     if (ImGui::SliderFloat("UI scale", &g_cfg.ui_scale, 0.7f, 1.6f, "%.2f"))
         persist::MarkDirty();
+    if (ImGui::SliderFloat("Launcher button size", &g_cfg.launcher_scale,
+                           0.5f, 2.0f, "%.2fx"))
+        persist::MarkDirty();
+    ImGui::TextDisabled(
+        "Size of the round button that opens this menu. Drag the button to "
+        "move it.");
     ImGui::Checkbox("Watermark", &g_cfg.watermark);
 
     ImGui::SeparatorText("Config profiles");
@@ -854,10 +860,12 @@ void TabSettings() {
     if (ImGui::Button("Reset everything")) {
         const bool wm = g_cfg.watermark;
         const float scale = g_cfg.ui_scale;
+        const float lscale = g_cfg.launcher_scale;
         g_cfg = Config();
         ConfigDefaults(g_cfg);
         g_cfg.watermark = wm;
         g_cfg.ui_scale = scale;
+        g_cfg.launcher_scale = lscale;
         persist::MarkDirty();
     }
 
@@ -953,10 +961,20 @@ void DrawLauncher() {
         g_launcher_pos = ImVec2(game::ScreenWidth() * 0.03f, game::ScreenHeight() * 0.32f);
         g_launcher_init = true;
     }
+
+    // Size from the config. Clamped so a bad value cannot make the button
+    // unhittable or fill the screen; the window, the rounding and the inner
+    // button all scale together so the circle stays a circle.
+    const float scale = (g_cfg.launcher_scale > 0.4f && g_cfg.launcher_scale < 2.5f)
+                            ? g_cfg.launcher_scale : 1.0f;
+    const float box = 64.0f * scale;
+    const float pad = 4.0f * scale;
+    const float inner = 56.0f * scale;
+
     ImGui::SetNextWindowPos(g_launcher_pos, ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(64, 64), ImGuiCond_Always);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4, 4));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 32.0f);
+    ImGui::SetNextWindowSize(ImVec2(box, box), ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad, pad));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, box * 0.5f);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.06f, 0.09f, 0.15f, 0.80f));
     ImGui::Begin("##rain_launcher", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -964,7 +982,7 @@ void DrawLauncher() {
                      ImGuiWindowFlags_NoMove);
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.10f, 0.20f, 0.36f, 0.9f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.36f, 0.62f, 0.95f));
-    const bool clicked = ImGui::Button("Rain", ImVec2(56, 56));
+    const bool clicked = ImGui::Button("Rain", ImVec2(inner, inner));
 
     // Moveable launcher: dragging the button moves it via the window position;
     // a clean click (no drag) opens the menu. The drag flag is read before it

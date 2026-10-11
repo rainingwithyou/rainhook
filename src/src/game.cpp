@@ -85,14 +85,26 @@ std::mutex g_mtx;
 
 // Match-scoped state invalidation: when BattleManager.Instance changes (new
 // match), camp cached from the old match is poison — it inverts colors and
-// points maphack at the wrong team. Track the manager pointer and reset.
+// points maphack at the wrong team.
+//
+// The pointer alone is not a reliable match boundary: IL2CPP reuses freed
+// memory, so match 2's manager can land at match 1's address and the pointer
+// comparison sees "same manager". The local player's guid is the second
+// signal — it is per-entity and changes with the match even when the manager
+// does not. Both are tracked; either changing triggers the reset.
 uintptr_t g_mgr_seen = 0;
+uint32_t g_local_guid_seen = 0;
+// Frames a differing camp has been observed. A real team change persists; a
+// teardown artifact does not, so the change is only accepted once it holds.
+int g_camp_change_frames = 0;
 
-void ResetMatchState() {
+void ResetMatchState(const char* why) {
     g_local_camp = -1;
     g_local_camp_strong = false;
     g_mgr_seen = 0;
-    LOGI("game: match state reset (new BattleManager.Instance)");
+    g_local_guid_seen = 0;
+    g_camp_change_frames = 0;
+    LOGI("game: match state reset (%s)", why);
 }
 
 bool ResolveShowEntity() {
@@ -447,6 +459,61 @@ bool DeriveLocalCamp(void* list, Container kind, int count) {
     // summons and most units. Trusting it inverted every colour and pointed
     // maphack at our own team. Better to report no camp than a wrong one.
     return false;
+}
+
+// Re-check the latched camp against the manager's live local-player reference.
+//
+// The manager-pointer change check in SnapshotPlayers is not sufficient on its
+// own: IL2CPP reuses freed memory, so the second match's BattleManager often
+// lands at the same address as the first's. When that happens the pointer
+// comparison sees "same manager", skips ResetMatchState, and the camp latched
+// in match 1 survives into match 2. If the player is on the other team the
+// second time, every colour inverts and maphack writes onto their own side —
+// the "enemy ESP shows my team" bug.
+//
+// The *value* of m_LocalPlayerShow does change between matches even when the
+// manager's address does not, so the local entity is the reliable signal.
+//
+// A single differing read is not enough to act on: during match teardown the
+// manager can briefly point at a stale entity, and latching that would be the
+// same bug in the other direction. So a change must be observed on several
+// consecutive frames before it is accepted — a real team change persists, a
+// teardown artifact does not. The counter resets the moment the read agrees
+// with the latch again.
+bool RevalidateLocalCamp() {
+    if (!g_f_local_player.ok()) return false;
+    uintptr_t mgr = ReadStaticPtr(g_f_mgr_instance.info);
+    if (!PtrOk(mgr)) return false;
+
+    void* lp = Read<void*>(reinterpret_cast<void*>(mgr), g_f_local_player.offset);
+    if (!PtrOk(reinterpret_cast<uintptr_t>(lp))) return false;
+
+    alignas(16) uint8_t buf[kEntityPeek];
+    if (!PeekEntity(lp, buf)) return false;
+
+    // Full parse, not just the camp field: Fill's sanity checks (camp in
+    // range, HP in a plausible range) reject a freed-but-mapped object, which
+    // a raw field read would happily accept.
+    Entity scratch;
+    if (!Fill(&scratch, lp, buf)) return false;
+    const int c = scratch.camp;
+    if (c <= 0 || c > 16) return false;
+
+    if (c == g_local_camp) {
+        g_camp_change_frames = 0;   // agrees: no pending change
+        return false;
+    }
+
+    // A differing camp. Require it to persist before trusting it.
+    constexpr int kConfirmFrames = 5;
+    if (++g_camp_change_frames < kConfirmFrames) return false;
+
+    LOGI("game: local camp changed %d -> %d (m_LocalPlayerShow, stable %d frames)",
+         g_local_camp, c, g_camp_change_frames);
+    g_local_camp = c;
+    g_local_camp_strong = true;
+    g_camp_change_frames = 0;
+    return true;
 }
 
 // Read through process_vm_readv: fails with EFAULT on unmapped/freed pages
@@ -869,9 +936,13 @@ int SnapshotPlayers(Entity* out, int max) {
     uintptr_t mgr = ReadStaticPtr(g_f_mgr_instance.info);
     if (!PtrOk(mgr)) return 0;
 
-    // New match detection: a changed BattleManager.Instance invalidates every
-    // match-scoped cache (camp, maphack target set).
-    if (g_mgr_seen != 0 && g_mgr_seen != mgr) ResetMatchState();
+    // New match detection. Two independent signals, because the manager
+    // pointer alone can be reused by the allocator between matches:
+    //   - the manager pointer changing, and
+    //   - the local player's guid changing (checked after the local entity is
+    //     resolved, below).
+    // Either invalidates every match-scoped cache (camp, maphack target set).
+    if (g_mgr_seen != 0 && g_mgr_seen != mgr) ResetMatchState("new BattleManager.Instance");
     g_mgr_seen = mgr;
 
     void* list = Read<void*>(reinterpret_cast<void*>(mgr), g_f_players.offset);
@@ -889,10 +960,38 @@ int SnapshotPlayers(Entity* out, int max) {
         n++;
     }
 
-    // Keep re-deriving until a reliable source answers: a weak guess taken from
-    // the friendly flag must be replaced as soon as the manager exposes the real
-    // local player, otherwise every colour and the maphack target set stay wrong.
-    if (!g_local_camp_strong) DeriveLocalCamp(list, kind, count);
+    // Second match-boundary signal: the local player's guid. The manager
+    // pointer can be reused between matches, but a fresh match gives the
+    // player a new entity guid, so a changed guid is a definitive boundary
+    // even when the pointer is identical. Read the manager's own local-player
+    // reference, not the list (the list may not contain us yet on the first
+    // frame of a match).
+    if (g_f_local_player.ok()) {
+        void* lp = Read<void*>(reinterpret_cast<void*>(mgr), g_f_local_player.offset);
+        if (PtrOk(reinterpret_cast<uintptr_t>(lp))) {
+            alignas(16) uint8_t lb[kEntityPeek];
+            if (PeekEntity(lp, lb)) {
+                const int32_t g = ReadI(lb, F.guid);
+                if (g != 0) {
+                    const uint32_t gu = static_cast<uint32_t>(g);
+                    if (g_local_guid_seen != 0 && g_local_guid_seen != gu) {
+                        ResetMatchState("local player guid changed");
+                    }
+                    g_local_guid_seen = gu;
+                }
+            }
+        }
+    }
+
+    // Camp: derive when unknown, re-validate when latched. The re-validation
+    // is what actually fixes the second-match inversion — the reset above can
+    // only fire when a boundary is visible, and the re-check catches the case
+    // where the camp simply differs from the live local player's.
+    if (!g_local_camp_strong) {
+        DeriveLocalCamp(list, kind, count);
+    } else {
+        RevalidateLocalCamp();
+    }
     return n;
 }
 
@@ -996,7 +1095,25 @@ const FrameSnapshot& Snapshot() {
     g_snap.n_players = SnapshotPlayers(g_snap.players, 256);
     g_snap.n_monsters = SnapshotMonsters(g_snap.monsters, 256);
     g_snap.has_self = SelfEntity(&g_snap.self) && g_snap.self.obj != nullptr;
-    g_snap.local_camp = LocalCamp();
+
+    // The local camp comes from the live self entity when there is one. That
+    // object was parsed this frame, so its camp field is the freshest truth
+    // available and cannot be stale across a match boundary — the failure the
+    // latch suffered. LocalCamp() (the derived/latched value) is the fallback
+    // for the frames before the local entity exists (lobby, first load frame).
+    if (g_snap.has_self && g_snap.self.camp > 0 && g_snap.self.camp < 17) {
+        g_snap.local_camp = g_snap.self.camp;
+        // Keep the latch in step so the fallback path agrees with what the
+        // ESP is actually using.
+        if (g_local_camp != g_snap.self.camp) {
+            LOGI("game: local camp %d -> %d (live self entity)",
+                 g_local_camp, g_snap.self.camp);
+            g_local_camp = g_snap.self.camp;
+            g_local_camp_strong = true;
+        }
+    } else {
+        g_snap.local_camp = LocalCamp();
+    }
 
     // Objective HP tracking rides the same walk. It has to run whether or not
     // anything is drawn from it, because auto-retribution reads its result.

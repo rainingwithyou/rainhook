@@ -281,6 +281,11 @@ struct Config {
     bool menu_open = false;
     bool watermark = true;
     float ui_scale = 1.0f;         // ImGui font/style scale
+    // Size of the round launcher button that opens the menu, as a multiplier
+    // of the base 64px. The button is the only thing on screen when the menu
+    // is closed, so a small one is hard to hit on a high-DPI panel and a big
+    // one is in the way on a small one.
+    float launcher_scale = 1.0f;
 };
 
 extern Config g_cfg;
