@@ -1332,17 +1332,33 @@ void DroneOffsetDetour(void* self, float x, float y, float z,
 
 // Install the hook once, when the class and setter are resolvable. Returns true
 // when the detour is live.
+//
+// A failure that is not "the class is not loaded yet" is latched: the method
+// lookup and the executable-range scan behind MethodCodePtr are not free, and
+// retrying them every frame on a build where the hook simply cannot install
+// starves the render thread. Once the class resolves and the setter is
+// reachable, one attempt is the answer for this session.
+bool g_drone_hook_failed = false;
+
 bool InstallDroneHook() {
     if (g_drone_hook_ready) return true;
+    if (g_drone_hook_failed) return false;
     if (!g_sf_class || !api.class_get_method_from_name) return false;
 
     const MethodInfo* setter = api.class_get_method_from_name(g_sf_class,
                                                              "set_offSetPos", 1);
-    if (!setter) return false;
+    if (!setter) {
+        // The class is bound but the setter is not — a build with a renamed
+        // setter. Latch: the name is not going to appear by retrying.
+        LOGI("drone: set_offSetPos not found on SmoothFollow, hook disabled");
+        g_drone_hook_failed = true;
+        return false;
+    }
 
     const uintptr_t code = MethodCodePtr(setter);
     if (!code) {
         LOGI("drone: set_offSetPos found but no executable code pointer");
+        g_drone_hook_failed = true;
         return false;
     }
 
@@ -1351,6 +1367,7 @@ bool InstallDroneHook() {
                         reinterpret_cast<void**>(&g_orig_offset));
     if (!h || !g_orig_offset) {
         LOGI("drone: set_offSetPos hook failed (code=%p)", (void*)code);
+        g_drone_hook_failed = true;
         return false;
     }
     g_drone_hook_ready = true;
@@ -1453,14 +1470,33 @@ int ApplyDrone() {
     if (!g_unity_camera) return 0;
 
     // Class/field lookup retries while unbound (SmoothFollow arrives with the
-    // battle scene); the instance lookup is throttled harder because it is a
-    // scene scan.
+    // battle scene).
     static int resolve_age = 1000;
     if (!g_sf_class_done && resolve_age++ > 120) {
         resolve_age = 0;
         ResolveDroneClasses();
     }
-    ResolveDroneInstance();
+
+    // The instance lookup is a FindObjectOfType scene scan, so it is throttled
+    // hard AND only run when something actually needs an instance. Only the
+    // field-write fallback needs one: the hook path works from the class's
+    // MethodInfo alone, and the FOV path never touches SmoothFollow.
+    // The previous code called this every frame unconditionally; in the lobby
+    // there is no SmoothFollow instance to find, so every frame walked the
+    // whole scene and the render thread starved — the lobby freeze.
+    const bool want_instance = (g_cfg.drone_height > 0.01f) &&
+                               !(g_cfg.drone_hook && g_drone_hook_ready);
+    if (g_sf_inst) {
+        // Resolved already: the liveness re-check inside is a peek, not a
+        // scan, so it can run per frame.
+        ResolveDroneInstance();
+    } else if (want_instance) {
+        static int scan_age = 1000;
+        if (scan_age++ > 300) {   // ~5 s at 60 fps
+            scan_age = 0;
+            ResolveDroneInstance();
+        }
+    }
 
     // Preferred path: the VYNIX-model hook. Once the class resolves it is
     // installed once and then does the lifting on the game's own camera thread,
@@ -1581,6 +1617,7 @@ void TickSkin() {
 const char* DroneHookState() {
     if (!g_cfg.drone_hook) return "off";
     if (g_drone_hook_ready) return "live";
+    if (g_drone_hook_failed) return "unavailable on this build";
     if (!g_sf_class) return "waiting for SmoothFollow";
     return "not installed";
 }
