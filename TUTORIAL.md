@@ -344,6 +344,29 @@ adb shell "cp /sdcard/Download/rain.so $GAMEDIR/librudp.bytes"
 Your `rain_configs/` and `rain_icons/` are untouched. New settings added in
 an update use defaults until you change them; your saved values carry over.
 
+### Reinstalling the game wipes the icons
+
+`rain_icons/` lives inside the game's own data directory
+(`Android/data/com.mobile.legends/files/`). **Reinstalling MLBB deletes that
+whole directory**, so the hero portraits (ESP + minimap) go blank while
+everything else keeps working. `rain_configs/` is lost the same way.
+
+Rain logs the scan when it runs:
+
+```
+icons: loaded N new hero icons from .../rain_icons (N total)
+```
+
+If that line never appears, the folder is missing or empty. To restore the
+portraits, push the icon set back:
+
+```bash
+adb push rain_icons/. /sdcard/Android/data/com.mobile.legends/files/rain_icons/
+```
+
+Rain rescans the folder every 10 seconds, so the icons come back without a
+game restart. The set ships with the releases (145 files, `<hero_id>.png`).
+
 ---
 
 ## 8. Uninstalling / restoring the original
