@@ -21,6 +21,14 @@ struct Entity {
     bool is_hero = false;
     bool is_fake = false;
     bool is_dead = false;
+    // The game's own death flags, distinct from m_bDeadAnima (which is the
+    // animation state and can lag or miss a corpse entirely):
+    //   unity_blood_death   — the engine considers the blood bar dead
+    //   unity_minimap_death — the engine considers the minimap icon dead
+    // Either one being set means the entity is a corpse whose cached position
+    // no longer tracks anything.
+    bool blood_death = false;
+    bool minimap_death = false;
     float hp = 0, hp_max = 0;
     float x = 0, y = 0, z = 0;
     bool pos_is_unity = false;    // position came from m_vUnityCachePosition

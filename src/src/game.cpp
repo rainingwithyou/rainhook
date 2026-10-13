@@ -36,6 +36,7 @@ struct ShowFields {
         radius, skin, show_skin, minimap_visible, blood_visible, grass_id, dead_sight,
         dead_sight_eye, renderer_visible, outside_grass, ignore_outside_grass,
         head_offset, dead_anima, skill_invisible, is_dead_flag, move_speed, entity_name,
+        blood_death, minimap_death,  // the engine's own death verdicts
         cool_comp,  // m_ShowCoolDownComp — per-entity spell cooldowns
         is_frozen,  // m_bIsFrozen — hard CC, used by the cc_only targeting filter
         atk_range;  // m_AtkDis — the entity's own attack reach
@@ -139,6 +140,12 @@ bool ResolveShowEntity() {
     F.ignore_outside_grass = GetField(g_show_entity, "ignoreVisibleOutsideGrassInRange");
     F.head_offset = GetField(g_show_entity, "m_HeadPosOffset");
     F.dead_anima = GetField(g_show_entity, "m_bDeadAnima");
+    // The engine's own death verdicts. m_bDeadAnima is the animation state and
+    // can be cleared before the corpse is gone (or set while the entity is
+    // still targetable); these two are what the engine's own blood-bar and
+    // minimap code consults, so they are the authoritative "this is a corpse".
+    F.blood_death = GetField(g_show_entity, "m_bUnityBloodDeath");
+    F.minimap_death = GetField(g_show_entity, "m_bUnityMinimapDeath");
     F.skill_invisible = GetField(g_show_entity, "_iSkillInvisibility");
     F.move_speed = GetField(g_show_entity, "m_dMoveSpeed");
     F.cool_comp = GetField(g_show_entity, "m_ShowCoolDownComp");
@@ -555,7 +562,14 @@ bool Fill(Entity* e, void* o, const void* img) {
     e->blood_visible = ReadB(img, F.blood_visible);
     e->grass_id = ReadI(img, F.grass_id);
     e->dead_sight = ReadI(img, F.dead_sight);
-    e->is_dead = ReadB(img, F.dead_anima);
+    e->blood_death = ReadB(img, F.blood_death);
+    e->minimap_death = ReadB(img, F.minimap_death);
+    // Death verdict: the animation flag OR either engine verdict. The anima
+    // flag alone under-reports (it can miss a corpse whose death animation was
+    // skipped or already finished); the engine flags alone can lag on the
+    // first frames of a death. The union is what "is a corpse" means to the
+    // renderer, and it is what keeps the ESP from drawing a stale position.
+    e->is_dead = ReadB(img, F.dead_anima) || e->blood_death || e->minimap_death;
     e->is_hero = ReadB(img, F.is_cache_hero) || !e->is_soldier;
 
     // Camp is a small enum; pointer-fragment garbage reads far outside it.
@@ -615,6 +629,21 @@ bool Fill(Entity* e, void* o, const void* img) {
     if (plog++ < 8) {
         LOGI("game: pos unity=(%.1f,%.1f,%.1f) cache=(%.1f,%.1f,%.1f) obj=(%.1f,%.1f,%.1f)",
              ux, uy, uz, cx, cy, cz, ox, oy, oz);
+    }
+    // First death of each entity, logged once: records which of the three
+    // death signals fired and where each position field sat at that moment.
+    // The dead-ESP bug was a corpse drawn at a frozen position — this line is
+    // the evidence trail if it ever comes back on a future build.
+    if (e->blood_death || e->minimap_death || e->is_dead) {
+        static uint32_t last_guid_dead = 0;
+        if (e->guid != 0 && e->guid != last_guid_dead) {
+            last_guid_dead = e->guid;
+            LOGI("game: dead guid=%u anima=%d blood=%d minimap=%d hp=%.0f "
+                 "pos u=(%.1f,%.1f,%.1f) c=(%.1f,%.1f,%.1f) o=(%.1f,%.1f,%.1f)",
+                 e->guid, ReadB(img, F.dead_anima) ? 1 : 0, e->blood_death ? 1 : 0,
+                 e->minimap_death ? 1 : 0, e->hp,
+                 ux, uy, uz, cx, cy, cz, ox, oy, oz);
+        }
     }
     return true;
 }
@@ -1236,7 +1265,11 @@ int ApplyMaphack(bool enabled) {
         if (camp < 0 || camp > 16) continue;
 
         // A dead entity may already have torn-down presentation objects.
-        if (ReadB(buf, F.dead_anima)) continue;
+        // Check every death signal: the anima flag alone can miss a corpse
+        // whose death animation was skipped or already finished.
+        if (ReadB(buf, F.dead_anima) || ReadB(buf, F.blood_death) ||
+            ReadB(buf, F.minimap_death))
+            continue;
 
         // The game recomputes these flags every frame from its own vision logic,
         // so they have to be rewritten every frame or the reveal is simply

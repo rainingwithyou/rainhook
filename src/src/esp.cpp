@@ -30,9 +30,14 @@ void ConfigDefaults(Config& c) {
         // self: off by default (it clutters the centre of the screen), but the
         // box and bar are there the moment it is switched on.
         {CAT_SELF,          0.35f, 0.65f, 1.00f, 1.0f, false, true,  true,  false, true,  false, false, false, 1},
-        {CAT_ALLY_HERO,     0.30f, 0.85f, 0.40f, 1.0f, false, true,  true,  false, true,  true,  true,  true,  1},
+        {CAT_ALLY_HERO,     0.30f, 0.85f, 0.40f, 1.0f, false, true,  true,  false, true,  true,  true,  true,  0},
         // Enemy hero corpses stay visible (they are information), minions hide.
-        {CAT_ENEMY_HERO,    1.00f, 0.25f, 0.25f, 1.0f, true,  true,  true,  false, true,  true,  true,  true,  2},
+        // Dead heroes default to HIDE: the engine stops updating their cached
+        // position the moment they die, so a corpse ESP is drawn at the last
+        // live position — which reads as the box being detached from the hero
+        // (the "42m frozen" report). Users who want the corpse marker can set
+        // the row's dead_mode to 1 (own colour) or 2 (shared dead colour).
+        {CAT_ENEMY_HERO,    1.00f, 0.25f, 0.25f, 1.0f, true,  true,  true,  false, true,  true,  true,  true,  0},
         {CAT_ALLY_MINION,   0.35f, 0.70f, 0.45f, 1.0f, false, true,  true,  false, false, false, false, false, 0},
         {CAT_ENEMY_MINION,  0.95f, 0.55f, 0.30f, 1.0f, false, true,  true,  false, false, false, false, false, 0},
         {CAT_TURTLE,        0.55f, 0.85f, 1.00f, 1.0f, true,  true,  true,  false, false, true,  false, false, 0},
