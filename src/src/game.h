@@ -152,8 +152,10 @@ const char* HeroName(int hero_id);
 // raw id). Ids are MLBB config ids; calibrate from logcat on first snapshot.
 const char* MonsterName(int id);
 
-// Which jungle category an entity belongs to: "turtle", "lord", "buff",
-// "minion" or "creep". Null when the id is unknown and it is not a minion.
+// Which jungle category an entity belongs to: "turtle", "lord", "blue_buff",
+// "red_buff", "litho", "minion" or "creep". Null when the id is unknown and it
+// is not a minion. The legacy aggregate "buff" (either rune buff) is handled
+// by the tracking layer, not here.
 const char* MonsterCategory(const Entity& e);
 
 // The entity's own display name (m_RoleName), read live from the game.
@@ -195,12 +197,20 @@ bool ObjectivePos(const char* which, float* x, float* z);
 // the objective has not been seen this match.
 bool TrackedObjectiveHp(const char* which, float* hp, float* hp_max);
 
-// True while the objective was damaged within the last ~5 s and is contested.
+// True while the objective was damaged within the alert window and is
+// contested. Turtle/Lord come from the pit trackers; the buffs and Litho from
+// the per-camp trackers (which fire on the lowest-HP live member).
 bool TurtleContested();
 bool LordContested();
+bool BlueBuffContested();
+bool RedBuffContested();
+bool LithoContested();
 // Seconds since the objective was last damaged (999 when never seen).
 float TurtleSinceHit();
 float LordSinceHit();
+float BlueBuffSinceHit();
+float RedBuffSinceHit();
+float LithoSinceHit();
 
 // Write m_ShowSkinId on an entity (skin changer). Returns false when the field
 // is unavailable.

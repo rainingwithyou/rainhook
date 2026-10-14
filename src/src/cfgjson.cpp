@@ -143,10 +143,12 @@ std::string Arr(int depth, const std::vector<std::string>& items) {
 }
 
 // Category names, index-matched to EspCat. Stable identifiers: renaming one
-// orphans that row's settings in existing files.
+// orphans that row's settings in existing files. When the buff row split into
+// blue_buff/red_buff and the litho row was added, the old "buff" key is still
+// read as a fallback so existing profiles keep their colours (see ApplyCat).
 const char* kCatNames[CAT_COUNT] = {
     "self", "ally_hero", "enemy_hero", "ally_minion", "enemy_minion",
-    "turtle", "lord", "buff", "creep",
+    "turtle", "lord", "blue_buff", "red_buff", "litho", "creep",
 };
 
 std::string CatObj(const CatCfg& cc, int depth) {
@@ -197,6 +199,7 @@ std::string Emit(const Config& c) {
         KI("tracer_origin_mode", c.esp_line_origin_mode),
         KI("tracer_vpos", c.esp_line_vpos),
         KF("tracer_origin", c.esp_line_origin),
+        KI("tracer_anchor", c.esp_line_anchor),
         KF("max_distance", c.esp_max_distance),
         KF("entity_max_distance", c.ent_max_distance),
         KC("dead_color", c.col_dead),
@@ -221,6 +224,11 @@ std::string Emit(const Config& c) {
             KB("enabled", c.alerts_enabled),
             KB("turtle", c.alert_turtle),
             KB("lord", c.alert_lord),
+            KB("blue_buff", c.alert_blue_buff),
+            KB("red_buff", c.alert_red_buff),
+            KB("litho", c.alert_litho),
+            KF("window", c.alert_window),
+            KF("scale", c.alert_scale),
         })),
         KO("skin", Obj(1, {
             KB("enabled", c.skin_enabled),
@@ -561,12 +569,23 @@ void Apply(const Val& root, Config& c) {
         GI(esp, "tracer_origin_mode", c.esp_line_origin_mode);
         GI(esp, "tracer_vpos", c.esp_line_vpos);
         GF(esp, "tracer_origin", c.esp_line_origin);
+        GI(esp, "tracer_anchor", c.esp_line_anchor);
         GF(esp, "max_distance", c.esp_max_distance);
         GF(esp, "entity_max_distance", c.ent_max_distance);
         GC(esp, "dead_color", c.col_dead);
         if (const Val* cats = esp->find("categories")) {
             for (int i = 0; i < CAT_COUNT; i++)
                 ApplyCat(cats->find(kCatNames[i]), c.cat[i]);
+
+            // Migration: the pre-v45.2 config had a single "buff" row that is
+            // now split into blue_buff/red_buff. Copy the old row's settings
+            // into both so an existing profile keeps its colour and toggles.
+            // Only applied when the new keys are absent (fresh installs and
+            // re-saved profiles use the new names directly).
+            if (const Val* old = cats->find("buff")) {
+                if (!cats->find("blue_buff")) ApplyCat(old, c.cat[CAT_BLUE_BUFF]);
+                if (!cats->find("red_buff"))  ApplyCat(old, c.cat[CAT_RED_BUFF]);
+            }
         }
     }
     if (const Val* rc = root.find("range_circle")) {
@@ -580,6 +599,11 @@ void Apply(const Val& root, Config& c) {
         GB(al, "enabled", c.alerts_enabled);
         GB(al, "turtle", c.alert_turtle);
         GB(al, "lord", c.alert_lord);
+        GB(al, "blue_buff", c.alert_blue_buff);
+        GB(al, "red_buff", c.alert_red_buff);
+        GB(al, "litho", c.alert_litho);
+        GF(al, "window", c.alert_window);
+        GF(al, "scale", c.alert_scale);
     }
     if (const Val* sk = root.find("skin")) {
         GB(sk, "enabled", c.skin_enabled);

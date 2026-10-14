@@ -30,13 +30,14 @@ namespace {
 // ---------------------------------------------------------------------------
 
 const char* kCatNames[CAT_COUNT] = {
-    "Self", "Ally Hero", "Enemy Hero", "Ally Minion", "Enemy Minion",
-    "Turtle", "Lord", "Buff", "Creep",
+    "self", "ally_hero", "enemy_hero", "ally_minion", "enemy_minion",
+    "turtle", "lord", "blue_buff", "red_buff", "litho", "creep",
 };
 const char* kCatHints[CAT_COUNT] = {
     "you", "teammate", "hostile hero",
     "friendly wave", "hostile wave",
-    "objective", "objective", "jungle buff", "jungle camp",
+    "objective", "objective", "serpent", "fire beetle", "lithowanderer",
+    "jungle camp",
 };
 
 enum Tab { TAB_VISUAL = 0, TAB_COMBAT, TAB_MAP, TAB_STATUS, TAB_SETTINGS, TAB_COUNT };
@@ -152,6 +153,14 @@ void SectionEspMaster() {
         ImGui::SameLine();
         ImGui::RadioButton("Bottom", &g_cfg.esp_line_vpos, 1);
     }
+    ImGui::TextUnformatted("Ends at");
+    ImGui::SameLine();
+    ImGui::RadioButton("Feet", &g_cfg.esp_line_anchor, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("Body", &g_cfg.esp_line_anchor, 1);
+    ImGui::SameLine();
+    ImGui::RadioButton("Head", &g_cfg.esp_line_anchor, 2);
+    ImGui::TextDisabled("where the line meets the target (body reads best on heroes)");
 
     ImGui::SeparatorText("Distance cap");
     ImGui::SliderFloat("Players##dist", &g_cfg.esp_max_distance, 0.0f, 2000.0f,
@@ -252,15 +261,37 @@ void SectionCategories() {
 
 void SectionAlerts() {
     if (!ImGui::CollapsingHeader("Objective Alerts")) return;
-    ImGui::Checkbox("Enable##alerts", &g_cfg.alerts_enabled);
-    ImGui::BeginDisabled(!g_cfg.alerts_enabled);
-    ImGui::Checkbox("Turtle under attack", &g_cfg.alert_turtle);
-    ImGui::SameLine();
-    ImGui::Checkbox("Lord under attack", &g_cfg.alert_lord);
-    ImGui::EndDisabled();
+
     ImGui::TextWrapped(
-        "Banner fires when the objective's HP drops and stays up for a few "
-        "seconds after the last hit.");
+        "A standalone feature: banners appear at the top of the screen when a "
+        "jungle objective is being attacked. Independent of ESP and the "
+        "minimap - it works with both switched off, and it sees the HP drop "
+        "even when the pit itself is fogged.");
+    ImGui::Spacing();
+
+    ImGui::Checkbox("Enable alerts##alerts", &g_cfg.alerts_enabled);
+    ImGui::BeginDisabled(!g_cfg.alerts_enabled);
+
+    ImGui::SeparatorText("Objectives");
+    ImGui::Checkbox("Turtle##al", &g_cfg.alert_turtle);
+    ImGui::SameLine();
+    ImGui::Checkbox("Lord##al", &g_cfg.alert_lord);
+    ImGui::Checkbox("Blue buff##al", &g_cfg.alert_blue_buff);
+    ImGui::SameLine();
+    ImGui::Checkbox("Red buff##al", &g_cfg.alert_red_buff);
+    ImGui::Checkbox("Lithowanderer##al", &g_cfg.alert_litho);
+
+    ImGui::SeparatorText("Banner");
+    ImGui::SliderFloat("Hold time", &g_cfg.alert_window, 1.0f, 15.0f, "%.0f s");
+    ImGui::SameLine();
+    ImGui::TextDisabled("after the last hit");
+    ImGui::SliderFloat("Text scale", &g_cfg.alert_scale, 0.5f, 2.5f, "%.1fx");
+
+    ImGui::EndDisabled();
+    ImGui::Spacing();
+    ImGui::TextDisabled(
+        "Banners use each objective's ESP colour. The hold time is how long "
+        "the banner stays up once the hits stop.");
 }
 
 void SectionDrone() {

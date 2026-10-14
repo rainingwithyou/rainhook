@@ -1,6 +1,7 @@
 #include "esp.h"
 
 #include <cstdio>
+#include <cfloat>
 #include <cmath>
 #include <cstring>
 #include <android/log.h>
@@ -42,7 +43,12 @@ void ConfigDefaults(Config& c) {
         {CAT_ENEMY_MINION,  0.95f, 0.55f, 0.30f, 1.0f, false, true,  true,  false, false, false, false, false, 0},
         {CAT_TURTLE,        0.55f, 0.85f, 1.00f, 1.0f, true,  true,  true,  false, false, true,  false, false, 0},
         {CAT_LORD,          0.80f, 0.45f, 1.00f, 1.0f, true,  true,  true,  false, false, true,  false, false, 0},
-        {CAT_BUFF,          0.40f, 0.90f, 0.55f, 1.0f, true,  true,  true,  false, false, true,  false, false, 0},
+        // Blue rune buff (Serpent) — blue, matching what the game calls it.
+        {CAT_BLUE_BUFF,     0.30f, 0.55f, 1.00f, 1.0f, true,  true,  true,  false, false, true,  false, false, 0},
+        // Red rune buff (Fire Beetle) — red-orange.
+        {CAT_RED_BUFF,      1.00f, 0.45f, 0.25f, 1.0f, true,  true,  true,  false, false, true,  false, false, 0},
+        // Lithowanderer — the walkie-grass camp; green.
+        {CAT_LITHO,         0.45f, 0.95f, 0.45f, 1.0f, true,  true,  true,  false, false, true,  false, false, 0},
         {CAT_CREEP,         0.85f, 0.85f, 0.60f, 1.0f, true,  true,  true,  false, false, true,  false, false, 0},
     };
     for (const Def& d : kDefs) {
@@ -94,11 +100,13 @@ float UnitHeight(const game::Entity& e) {
 
 float EntityHeight(EspCat id) {
     switch (id) {
-        case CAT_TURTLE: return 3.6f;
-        case CAT_LORD:   return 4.2f;
-        case CAT_BUFF:   return 2.4f;
-        case CAT_CREEP:  return 1.6f;
-        default:         return 1.6f;
+        case CAT_TURTLE:    return 3.6f;
+        case CAT_LORD:      return 4.2f;
+        case CAT_BLUE_BUFF: return 2.4f;
+        case CAT_RED_BUFF:  return 2.4f;
+        case CAT_LITHO:     return 2.0f;
+        case CAT_CREEP:     return 1.6f;
+        default:            return 1.6f;
     }
 }
 
@@ -190,9 +198,11 @@ EspCat PlayerCat(const game::Entity& e, bool enemy) {
 
 EspCat MonsterCat(const char* cat) {
     if (!cat) return CAT_COUNT;  // unclassified id: skipped
-    if (!strcmp(cat, "turtle")) return CAT_TURTLE;
-    if (!strcmp(cat, "lord"))   return CAT_LORD;
-    if (!strcmp(cat, "buff"))   return CAT_BUFF;
+    if (!strcmp(cat, "turtle"))    return CAT_TURTLE;
+    if (!strcmp(cat, "lord"))      return CAT_LORD;
+    if (!strcmp(cat, "blue_buff")) return CAT_BLUE_BUFF;
+    if (!strcmp(cat, "red_buff"))  return CAT_RED_BUFF;
+    if (!strcmp(cat, "litho"))     return CAT_LITHO;
     return CAT_CREEP;            // "creep" and lane "minion" share a row
 }
 
@@ -355,32 +365,6 @@ void DrawUnit(const DrawCtx& ctx, const game::Entity& e, EspCat cat_id,
     const ImU32 col = (dead && cc.dead_mode == 2) ? Col(g_cfg.col_dead)
                                                   : Col(cc.color);
 
-    // Tracer first, from an unclamped screen point: a target just off the edge
-    // should still get a line pointing at it.
-    if (cc.line) {
-        float ox = 0, oy = 0;
-        if (g_cfg.esp_line_origin_mode == 1 && ctx.self) {
-            float px = 0, py = 0;
-            if (game::WorldToScreenEx(ctx.self->x, ctx.self->y, ctx.self->z,
-                                      ctx.self->pos_is_unity, &px, &py)) {
-                ox = px; oy = py;
-            } else {
-                ox = ctx.sw * 0.5f; oy = ctx.sh * 0.5f;
-            }
-        } else {
-            ox = ctx.sw * g_cfg.esp_line_origin;
-            oy = (g_cfg.esp_line_vpos == 1) ? ctx.sh : ctx.sh * 0.5f;
-        }
-        const float m = 10.0f;
-        float ex = sx, ey = sy;
-        if (ex < m) ex = m;
-        if (ex > ctx.sw - m) ex = ctx.sw - m;
-        if (ey < m) ey = m;
-        if (ey > ctx.sh - m) ey = ctx.sh - m;
-        ctx.dl->AddLine(ImVec2(ox, oy), ImVec2(ex, ey), col,
-                        static_cast<float>(g_cfg.esp_thickness));
-    }
-
     // Everything below is anchored to the sprite, so cull it when the entity is
     // well outside the viewport.
     if (sx < -200 || sx > ctx.sw + 200 || sy < -200 || sy > ctx.sh + 200) return;
@@ -401,6 +385,41 @@ void DrawUnit(const DrawCtx& ctx, const game::Entity& e, EspCat cat_id,
     const float y0 = have_head ? (hy < sy ? hy : sy) : sy - box_h;
     const float x1 = sx + box_w * 0.5f;
     const float y1 = y0 + box_h;
+
+    // Tracer: from the chosen origin to the entity. The endpoint anchors to
+    // the box (feet / body centre / head) so the line visibly terminates on
+    // the target — a line to the feet reads as pointing at the ground under a
+    // tall hero. Drawn before the box so the box sits on top of the line.
+    if (cc.line) {
+        float ox = 0, oy = 0;
+        if (g_cfg.esp_line_origin_mode == 1 && ctx.self) {
+            float px = 0, py = 0;
+            if (game::WorldToScreenEx(ctx.self->x, ctx.self->y, ctx.self->z,
+                                      ctx.self->pos_is_unity, &px, &py)) {
+                ox = px; oy = py;
+            } else {
+                ox = ctx.sw * 0.5f; oy = ctx.sh * 0.5f;
+            }
+        } else {
+            ox = ctx.sw * g_cfg.esp_line_origin;
+            oy = (g_cfg.esp_line_vpos == 1) ? ctx.sh : ctx.sh * 0.5f;
+        }
+
+        float ex = sx, ey = sy;
+        if (have_head) {
+            if (g_cfg.esp_line_anchor == 1) ey = (sy + hy) * 0.5f;  // body centre
+            else if (g_cfg.esp_line_anchor == 2) ey = hy;           // head
+        }
+        // Clamp to the viewport so an off-screen target still gets a line
+        // pointing at it rather than one that runs off the edge.
+        const float m = 10.0f;
+        if (ex < m) ex = m;
+        if (ex > ctx.sw - m) ex = ctx.sw - m;
+        if (ey < m) ey = m;
+        if (ey > ctx.sh - m) ey = ctx.sh - m;
+        ctx.dl->AddLine(ImVec2(ox, oy), ImVec2(ex, ey), col,
+                        static_cast<float>(g_cfg.esp_thickness));
+    }
 
     if (cc.box) {
         DrawBox(ctx.dl, x0, y0, x1, y1, col, g_cfg.esp_box_style,
@@ -630,9 +649,10 @@ void DrawRangeCircle(const DrawCtx& ctx) {
     }
 }
 
-// Objective alerts — banners triggered when the turtle/lord HP drops recently.
-// Drawn under the watermark so it reads without opening the menu, even when the
-// pit itself is fogged.
+// Objective alerts — banners triggered when a jungle objective's HP drops
+// recently. A standalone feature: independent of ESP and the minimap, it draws
+// whenever the alert master is on, so the call is made without opening the
+// menu or even seeing the pit. Each objective has its own toggle.
 void DrawObjectiveAlerts() {
     if (!g_cfg.alerts_enabled) return;
     if (game::ScreenWidth() <= 0) return;
@@ -641,34 +661,46 @@ void DrawObjectiveAlerts() {
     const float sw = static_cast<float>(game::ScreenWidth());
 
     struct Alert { bool active; const char* text; ImU32 col; };
-    const Alert alerts[2] = {
+    const Alert alerts[] = {
         {g_cfg.alert_turtle && game::TurtleContested(),
-         "Turtle Under Attack", Col(g_cfg.cat[CAT_TURTLE].color)},
+         "TURTLE UNDER ATTACK", Col(g_cfg.cat[CAT_TURTLE].color)},
         {g_cfg.alert_lord && game::LordContested(),
-         "Lord Under Attack", Col(g_cfg.cat[CAT_LORD].color)},
+         "LORD UNDER ATTACK", Col(g_cfg.cat[CAT_LORD].color)},
+        {g_cfg.alert_blue_buff && game::BlueBuffContested(),
+         "BLUE BUFF UNDER ATTACK", Col(g_cfg.cat[CAT_BLUE_BUFF].color)},
+        {g_cfg.alert_red_buff && game::RedBuffContested(),
+         "RED BUFF UNDER ATTACK", Col(g_cfg.cat[CAT_RED_BUFF].color)},
+        {g_cfg.alert_litho && game::LithoContested(),
+         "LITHO UNDER ATTACK", Col(g_cfg.cat[CAT_LITHO].color)},
     };
+
+    // Text scale: multiply the font size so the banner reads at a glance. The
+    // ImGui font is fixed-size, so the size is applied per draw call.
+    const float scale = (g_cfg.alert_scale < 0.5f) ? 0.5f
+                      : (g_cfg.alert_scale > 2.5f) ? 2.5f : g_cfg.alert_scale;
+    const float fs = ImGui::GetFontSize() * scale;
 
     float y = 84.0f;
     for (const auto& a : alerts) {
         if (!a.active) continue;
-        const ImVec2 ts = ImGui::CalcTextSize(a.text);
+        const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0.0f, a.text);
         const float x = sw * 0.5f - ts.x * 0.5f;
 
         // Pulsing alpha so the banner reads as urgent without being loud.
         const float pulse = 0.75f + 0.25f * sinf(static_cast<float>(ImGui::GetTime()) * 6.0f);
-        const ImU32 bg = IM_COL32(20, 10, 10, static_cast<unsigned char>(160 * pulse));
-        const float pad = 10.0f;
-        dl->AddRectFilled(ImVec2(x - pad, y - 4), ImVec2(x + ts.x + pad, y + ts.y + 4),
-                          bg, 6.0f);
+        const ImU32 bg = IM_COL32(20, 10, 10, static_cast<unsigned char>(170 * pulse));
+        const float pad = 12.0f * scale;
+        dl->AddRectFilled(ImVec2(x - pad, y - 5.0f * scale),
+                          ImVec2(x + ts.x + pad, y + ts.y + 5.0f * scale),
+                          bg, 7.0f * scale);
 
-        char txt[48];
-        snprintf(txt, sizeof(txt), "%s", a.text);
         ImU32 tc = a.col;
         const unsigned char ta = static_cast<unsigned char>(255 * pulse);
         tc = (tc & ~IM_COL32_A_MASK) | (static_cast<ImU32>(ta) << IM_COL32_A_SHIFT);
-        dl->AddText(ImVec2(x + 1, y + 1), IM_COL32(0, 0, 0, 200), txt);
-        dl->AddText(ImVec2(x, y), tc, txt);
-        y += ts.y + 14.0f;
+        dl->AddText(ImGui::GetFont(), fs, ImVec2(x + 1.5f, y + 1.5f),
+                    IM_COL32(0, 0, 0, 200), a.text);
+        dl->AddText(ImGui::GetFont(), fs, ImVec2(x, y), tc, a.text);
+        y += ts.y + 16.0f * scale;
     }
 }
 

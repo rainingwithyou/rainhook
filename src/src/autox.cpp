@@ -113,7 +113,7 @@ void TickRetri(const Entity* self) {
         {"lord",   g_cfg.retri_lord},
         {"turtle", g_cfg.retri_turtle},
         {"buff",   g_cfg.retri_buff},
-        {"creep",  g_cfg.retri_litho},
+        {"litho",  g_cfg.retri_litho},
     };
 
     for (const Watch& w : watch) {

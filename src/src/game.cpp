@@ -1076,15 +1076,16 @@ int SnapshotMonsters(Entity* out, int max) {
         alignas(16) uint8_t buf[kEntityPeek];
         if (!PeekEntity(e, buf)) continue;
         if (!Fill(&out[n], e, buf)) continue;
-        if (mlog++ < 12) {
+        if (mlog++ < 24) {
             char nm[64] = {0};
             if (F.entity_name.ok()) {
                 void* sp = Read<void*>(buf, F.entity_name.offset);
                 if (PtrOk(reinterpret_cast<uintptr_t>(sp)))
                     ReadIl2CppString(reinterpret_cast<Il2CppString*>(sp), nm, sizeof(nm));
             }
-            LOGI("game: monster[%d] id=%d type=%d soldier=%d name='%s' pos=(%.1f,%.1f,%.1f)",
-                 i, out[n].id, out[n].type, out[n].is_soldier, nm, out[n].x, out[n].y, out[n].z);
+            LOGI("game: monster[%d] id=%d type=%d hp=%.0f/%.0f r=%.1f dead=%d name='%s' pos=(%.1f,%.1f,%.1f)",
+                 i, out[n].id, out[n].type, out[n].hp, out[n].hp_max, out[n].radius,
+                 out[n].is_dead ? 1 : 0, nm, out[n].x, out[n].y, out[n].z);
         }
         n++;
     }
@@ -1774,18 +1775,40 @@ const char* DroneHookState() {
 
 // MLBB jungle monster config ids. Unknown ids fall back to "Creep %d", and the
 // first monster snapshot logs raw ids to logcat so the table can be calibrated
-// against a live match. Ids 2002+ verified against XNISH's shipped config table
-// (Lord 2002, Turtle 2003/2110, Buff 2004/2005, Lithowanderer 2056/2072); the
-// low ids (7-16) are kept from the earlier calibration in case older scenes use
-// the legacy id space.
+// against a live match.
+//
+// Two id spaces are live. The CURRENT runtime ids were captured from a live
+// practice match (2026-10-14); the 2002+ ids come from the reference mod's
+// config strings and are kept in case other scenes use them. Live mapping,
+// keyed on HP class and map position:
+//   1009 (-41.2,0) 7900 HP  -> Turtle pit (top-left)
+//   1010 (41.2,0)  7900 HP  -> Lord pit (bottom-right)
+//   1015/1016      7300 HP  -> blue rune buff (inner camp, closer to base)
+//   1013/1014      5700 HP  -> red rune buff (outer camp, toward the lane)
+//   1007/1008      4500 HP  -> small jungle camps / Lithowanderer
+//   2093/2094      2183 HP  -> Crab's Treasure pair
+//   1011/1012      40000 HP -> base crystals (not jungle; left unmapped)
+//
+// The buff split is inferred from distance-to-base: the blue buff is always
+// the inner camp and the red buff the outer one. 1015/1016 sit ~20 units from
+// the base corner, 1013/1014 ~33 — so the former is blue, the latter red. If a
+// live match shows the colours swapped, the fix is a two-line swap here.
 struct MonsterId { int id; const char* name; };
 const MonsterId kMonsters[] = {
     {7, "Lord"}, {8, "Turtle"}, {9, "Turtle"},
-    {11, "Buff"}, {12, "Buff"}, {13, "Lithowander"}, {14, "Lithowander"},
+    {11, "RedBuff"}, {12, "BlueBuff"}, {13, "Lithowander"}, {14, "Lithowander"},
     {15, "Crab"}, {16, "Crab"},
+    {1007, "Lithowander"}, {1008, "Lithowander"},
+    {1009, "Turtle"},
+    {1010, "Lord"},
+    {1013, "BlueBuff"}, {1014, "RedBuff"},
+    {1015, "BlueBuff"}, {1016, "RedBuff"},
+    {2093, "Crab"}, {2094, "Crab"},
     {2002, "Lord"},
     {2003, "Turtle"}, {2110, "Turtle"},
-    {2004, "Buff"}, {2005, "Buff"},
+    {2004, "RedBuff"}, {2005, "BlueBuff"},
+    {2006, "Creep"}, {2007, "Creep"}, {2008, "Creep"}, {2009, "Creep"},
+    {2010, "Crab"}, {2011, "Creep"}, {2012, "Creep"},
     {2056, "Lithowander"}, {2072, "Lithowander"},
 };
 
@@ -1822,10 +1845,14 @@ struct CampTrack {
     bool seen = false;
     float hp = 0, hp_max = 0;
     int32_t id = 0;
-    float x = 0, z = 0;
+    float x = 0, z = 0;         // last-seen camp position
     bool have_pos = false;
+    double last_hit_time = -1;  // clock time of the last HP decrease (alerts)
+    float last_hp_seen = 0;
 };
-CampTrack g_buff_camp, g_litho_camp;
+CampTrack g_buff_camp, g_litho_camp;       // legacy aggregate (auto-retri)
+CampTrack g_blue_camp, g_red_camp;         // per-buff trackers (alerts + ESP)
+CampTrack g_litho_alert;                   // litho tracker with hit timing
 
 void TrackCampGroup(const Entity* ents, int n, const char* want, CampTrack* t);
 const char* MonsterCategory(const Entity& e);
@@ -1875,7 +1902,12 @@ void TrackObjectives(const Entity* ents, int n) {
     // Without this the retri_buff / retri_litho toggles were dead: the old
     // ObjectivePos/TrackedObjectiveHp only ever knew "turtle" and "lord".
     TrackCampGroup(ents, n, "buff", &g_buff_camp);
-    TrackCampGroup(ents, n, "creep", &g_litho_camp);
+    TrackCampGroup(ents, n, "litho", &g_litho_camp);
+    // Per-objective trackers for the alert banners. Each keeps its own
+    // last-hit clock so the buff/litho banners fire independently.
+    TrackCampGroup(ents, n, "blue_buff", &g_blue_camp);
+    TrackCampGroup(ents, n, "red_buff", &g_red_camp);
+    TrackCampGroup(ents, n, "litho", &g_litho_alert);
 }
 
 // Find the lowest-HP live entity of one category and keep its HP/position.
@@ -1887,19 +1919,28 @@ void TrackCampGroup(const Entity* ents, int n, const char* want, CampTrack* t) {
         const Entity& e = ents[i];
         if (!e.obj || e.is_dead) continue;
         const char* cat = MonsterCategory(e);
-        if (!cat || strcmp(cat, want) != 0) continue;
-        // Only the Lithowanderer counts as a litho camp; other creeps are
-        // ordinary jungle and must not arm the retribution.
-        if (!strcmp(want, "creep")) {
-            const char* nm = MonsterName(e.id);
-            if (!nm || !strstr(nm, "Litho")) continue;
-        }
+        if (!cat) continue;
+        // "buff" is the legacy aggregate the auto-retribution watches: it
+        // accepts either rune buff (blue or red) and picks the lowest. The
+        // per-colour categories are exact matches.
+        bool match;
+        if (!strcmp(want, "buff"))
+            match = !strcmp(cat, "blue_buff") || !strcmp(cat, "red_buff");
+        else
+            match = !strcmp(cat, want);
+        if (!match) continue;
         if (!best || e.hp < best->hp) best = &e;
     }
     if (!best) {
         t->seen = false;
+        t->last_hp_seen = 0;
         return;
     }
+    // Hit detection for the alert banners: an HP decrease between snapshots
+    // is someone attacking the camp right now.
+    if (t->seen && best->hp < t->last_hp_seen - 0.5f) t->last_hit_time = g_clock;
+    t->last_hp_seen = best->hp;
+
     t->seen = true;
     t->hp = best->hp;
     t->hp_max = best->hp_max;
@@ -1911,14 +1952,26 @@ void TrackCampGroup(const Entity* ents, int n, const char* want, CampTrack* t) {
     }
 }
 
+// Seconds since a camp was last hit (999 when never seen/hit).
+static double CampSinceHit(const CampTrack& t) {
+    if (!t.seen || t.last_hit_time < 0) return 999.0;
+    return g_clock - t.last_hit_time;
+}
+float BlueBuffSinceHit() { return static_cast<float>(CampSinceHit(g_blue_camp)); }
+float RedBuffSinceHit()  { return static_cast<float>(CampSinceHit(g_red_camp)); }
+float LithoSinceHit()    { return static_cast<float>(CampSinceHit(g_litho_alert)); }
+bool BlueBuffContested() { return BlueBuffSinceHit() < g_cfg.alert_window; }
+bool RedBuffContested()  { return RedBuffSinceHit()  < g_cfg.alert_window; }
+bool LithoContested()    { return LithoSinceHit()    < g_cfg.alert_window; }
+
 static double SinceHit(const ObjTrack& t) {
     if (!t.seen || t.last_hit_time < 0) return 999.0;
     return g_clock - t.last_hit_time;
 }
 float TurtleSinceHit() { return static_cast<float>(SinceHit(g_turtle)); }
 float LordSinceHit() { return static_cast<float>(SinceHit(g_lord)); }
-bool TurtleContested() { return TurtleSinceHit() < 5.0f; }
-bool LordContested() { return LordSinceHit() < 5.0f; }
+bool TurtleContested() { return TurtleSinceHit() < g_cfg.alert_window; }
+bool LordContested() { return LordSinceHit() < g_cfg.alert_window; }
 
 // Which jungle category an entity belongs to, from its config id. Returns null
 // for anything the caller's toggles do not care about.
@@ -1928,7 +1981,9 @@ const char* MonsterCategory(const Entity& e) {
     if (!n) return nullptr;
     if (strstr(n, "Turtle")) return "turtle";
     if (strstr(n, "Lord")) return "lord";
-    if (strstr(n, "Buff")) return "buff";
+    if (strstr(n, "BlueBuff")) return "blue_buff";
+    if (strstr(n, "RedBuff")) return "red_buff";
+    if (strstr(n, "Litho")) return "litho";
     return "creep";
 }
 
@@ -2098,7 +2153,7 @@ bool ObjectivePos(const char* which, float* x, float* z) {
         if (!g_buff_camp.have_pos) return false;
         *x = g_buff_camp.x; *z = g_buff_camp.z; return true;
     }
-    if (!strcmp(which, "creep")) {
+    if (!strcmp(which, "creep") || !strcmp(which, "litho")) {
         if (!g_litho_camp.have_pos) return false;
         *x = g_litho_camp.x; *z = g_litho_camp.z; return true;
     }
@@ -2121,7 +2176,7 @@ bool TrackedObjectiveHp(const char* which, float* hp, float* hp_max) {
         if (!g_buff_camp.seen || g_buff_camp.hp_max <= 0.0f) return false;
         *hp = g_buff_camp.hp; *hp_max = g_buff_camp.hp_max; return true;
     }
-    if (!strcmp(which, "creep")) {
+    if (!strcmp(which, "creep") || !strcmp(which, "litho")) {
         if (!g_litho_camp.seen || g_litho_camp.hp_max <= 0.0f) return false;
         *hp = g_litho_camp.hp; *hp_max = g_litho_camp.hp_max; return true;
     }

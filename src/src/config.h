@@ -14,8 +14,10 @@ enum EspCat {
     CAT_ENEMY_MINION,
     CAT_TURTLE,
     CAT_LORD,
-    CAT_BUFF,
-    CAT_CREEP,          // other jungle creeps (Lithowander, crab)
+    CAT_BLUE_BUFF,      // Serpent — the blue rune buff
+    CAT_RED_BUFF,       // Fire Beetle — the red rune buff
+    CAT_LITHO,          // Lithowanderer
+    CAT_CREEP,          // other jungle creeps (Crab's Treasure, small camps)
     CAT_COUNT
 };
 
@@ -92,6 +94,10 @@ struct Config {
     int  esp_line_vpos = 0;         // tracer vertical anchor: 0 = center, 1 = bottom
     // Tracer line origin, used in camera mode: 0.5 = screen center horizontally.
     float esp_line_origin = 0.5f;  // horizontal origin, 0 = left, 1 = right
+    // Where the tracer terminates on the target: 0 = feet (entity base),
+    // 1 = body centre, 2 = head. Centre/head read better on tall heroes —
+    // a line to the feet looks like it points at the ground under them.
+    int  esp_line_anchor = 1;
 
     float esp_max_distance = 0.0f;  // players, 0 = unlimited
     float ent_max_distance = 0.0f;  // jungle/camp entities, 0 = unlimited
@@ -112,12 +118,20 @@ struct Config {
     float range_circle_thickness = 2.0f;
     float range_circle_color[4] = {0.35f, 0.75f, 1.0f, 0.55f};
 
-    // ---- Objective alerts (VYNIX-style) ----
-    // Banner when Turtle/Lord HP is dropping: their HP decreased within the
-    // last few seconds and at least one enemy is near the pit.
+    // ---- Objective alerts ----
+    // A standalone Visual-tab feature, independent of ESP and the minimap:
+    // banners fire when a jungle objective's HP is dropping, so the call is
+    // made without opening the menu or even seeing the pit. Each objective
+    // has its own toggle; the shared knobs below govern all of them.
     bool alerts_enabled = true;
     bool alert_turtle = true;
     bool alert_lord = true;
+    bool alert_blue_buff = false;   // Serpent
+    bool alert_red_buff = false;    // Fire Beetle
+    bool alert_litho = false;       // Lithowanderer
+    float alert_window = 5.0f;      // seconds the banner stays up after the last hit
+    float alert_scale = 1.0f;       // banner text scale
+    bool alert_sound = false;       // reserved: no audio path yet
 
     // ---- Skin changer ----
     // Writes m_ShowSkinId on the local player's ShowEntity. Presentation-side:
