@@ -690,7 +690,23 @@ bool BuildVpFromGameCamera(Mat4* vp_out, bool log) {
         LOGI("game: camgame pos=(%.1f,%.1f,%.1f) rot=(%.1f,%.1f,%.1f) fov=%d",
              px, py, pz, rx, ry, rz, fov);
     }
-    if (fov <= 0 || fov > 170) fov = 45;
+    // Sanity: on 2.2.16 this camera's fields do not read as a usable pose at all
+    // (position reads as pointer garbage, rotation and fov as zero — verified
+    // live 2026-10-17). A matrix built from those produces finite-but-wrong
+    // screen points that park boxes at the screen centre, so refuse to build one
+    // from garbage: a point that cannot be projected must be rejected, not
+    // planted somewhere plausible.
+    if (!(px == px) || !(py == py) || !(pz == pz)) return false;
+    if (!(rx == rx) || !(ry == ry) || !(rz == rz)) return false;
+    if (px < -10000.0f || px > 10000.0f || pz < -10000.0f || pz > 10000.0f)
+        return false;
+    if (py < -2000.0f || py > 8000.0f) return false;
+    if (rx < -1440.0f || rx > 1440.0f || ry < -1440.0f || ry > 1440.0f ||
+        rz < -1440.0f || rz > 1440.0f)
+        return false;
+    if (rx == 0.0f && ry == 0.0f && rz == 0.0f) return false;  // never a battle camera
+    if (g_f_cam_fov.ok() && (fov <= 0 || fov > 170)) return false;
+    if (!g_f_cam_fov.ok()) fov = 45;
 
     // View: inverse of the camera transform = [R^T | -R^T * eye]
     float R[3][3];
@@ -1155,6 +1171,15 @@ const FrameSnapshot& Snapshot() {
 
 namespace {
 
+// Projection diagnostics: which projector last succeeded (1 = Unity renderer
+// matrices, 2 = the game-camera fallback). Read by the ESP calibration log.
+int g_last_proj = 0;
+
+// True while UnityProject holds a usable matrix pair for this frame. When the
+// matrices exist and a point is rejected (behind the camera), callers must not
+// fall back to a second, different matrix — that is a cull, not a fallback.
+bool g_unity_vp_ok = false;
+
 // Unity's own camera matrices — the truth for where a Unity-space point (and
 // therefore a sprite drawn from it) lands on screen. Re-fetched periodically
 // rather than once: the main camera is not the same object across scenes, and
@@ -1191,7 +1216,11 @@ bool UnityProject(float wx, float wy, float wz, float* sx, float* sy) {
             }
         }
     }
-    if (have_vp && ProjectPoint(vp, wx, wy, wz, g_sw, g_sh, sx, sy)) return true;
+    g_unity_vp_ok = have_vp;
+    if (have_vp && ProjectPoint(vp, wx, wy, wz, g_sw, g_sh, sx, sy)) {
+        g_last_proj = 1;
+        return true;
+    }
     return false;
 }
 
@@ -1207,7 +1236,10 @@ bool GameProject(float wx, float wy, float wz, float* sx, float* sy) {
         game_vp_age = 0;
         have_game_vp = BuildVpFromGameCamera(&game_vp, false);
     }
-    if (have_game_vp && ProjectPoint(game_vp, wx, wy, wz, g_sw, g_sh, sx, sy)) return true;
+    if (have_game_vp && ProjectPoint(game_vp, wx, wy, wz, g_sw, g_sh, sx, sy)) {
+        g_last_proj = 2;
+        return true;
+    }
     return false;
 }
 
@@ -1222,12 +1254,48 @@ bool WorldToScreenEx(float wx, float wy, float wz, bool unity_space,
     // ~13 px of its sprite, and rotating the point (the map's 45-degree minimap
     // convention) pushed it thousands of pixels off. So both spaces go through
     // the Unity matrices directly; the unity flag only records the source.
+    //
+    // The game-camera fallback is ONLY for when the Unity camera is
+    // unreachable. When its matrices exist and a point is rejected (behind the
+    // camera or inside the near plane), falling through would project that
+    // point through a second, different matrix — and on 2.2.16 the game-camera
+    // fields read as garbage, so the "fallback" parked the box at a fixed wrong
+    // screen position (observed live: the box for a 74 m enemy drawn beside the
+    // local hero; feet and head through different matrices in one call produced
+    // the giant offset rectangles). A point the renderer cannot see on screen
+    // must be culled, not re-projected.
     if (UnityProject(wx, wy, wz, sx, sy)) return true;
+    if (g_unity_vp_ok) return false;
     return GameProject(wx, wy, wz, sx, sy);
 }
 
 bool WorldToScreen(float wx, float wy, float wz, float* sx, float* sy) {
     return WorldToScreenEx(wx, wy, wz, true, sx, sy);
+}
+
+int LastProjector() { return g_last_proj; }
+
+void DiagCameraLine(char* out, int n) {
+    // Both camera sources in one line: the game's ShowBattleCamera fields
+    // (position/rotation/fov, the GameProject input) and the managed Unity
+    // camera's live world position (what the renderer actually draws from).
+    float px = 0, py = 0, pz = 0, rx = 0, ry = 0, rz = 0;
+    int fov = 0;
+    if (g_f_cam_instance.ok()) {
+        uintptr_t cam = ReadStaticPtr(g_f_cam_instance.info);
+        if (PtrOk(cam)) {
+            void* c = reinterpret_cast<void*>(cam);
+            ReadVec3(c, g_f_cam_pos, &px, &py, &pz);
+            ReadVec3(c, g_f_cam_rot_vect, &rx, &ry, &rz);
+            if (g_f_cam_fov.ok()) fov = Read<int32_t>(c, g_f_cam_fov.offset);
+        }
+    }
+    float ux = 0, uy = 0, uz = 0;
+    const bool uok = UnityCamPos(&ux, &uy, &uz);
+    snprintf(out, n,
+             "camdiag game=(%.1f,%.1f,%.1f) rot=(%.1f,%.1f,%.1f) fov=%d "
+             "unityok=%d unity=(%.1f,%.1f,%.1f)",
+             px, py, pz, rx, ry, rz, fov, uok ? 1 : 0, ux, uy, uz);
 }
 
 int ApplyMaphack(bool enabled) {

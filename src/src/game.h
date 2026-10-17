@@ -87,6 +87,14 @@ bool WorldToScreen(float wx, float wy, float wz, float* sx, float* sy);
 bool WorldToScreenEx(float wx, float wy, float wz, bool unity_space,
                      float* sx, float* sy);
 
+// ---- projection diagnostics (ESP calibration) ----
+// Which projector produced the last successful projection: 1 = the Unity
+// renderer matrices, 2 = the game-camera fallback, 0 = none.
+int LastProjector();
+// One-line dump of both camera sources, for calibrating projection error
+// against logcat.
+void DiagCameraLine(char* out, int n);
+
 // Call once per rendered frame. The camera matrices are re-read from here, so
 // the projection never lags the moving camera.
 void BeginFrame();

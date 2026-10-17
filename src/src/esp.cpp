@@ -12,6 +12,10 @@
 #include "game.h"
 #include "icons.h"
 
+// ESP calibration logging (ESP-offset hunt, 2026-10-17). Off in releases; flip
+// to 1 to sample projections per hero box when chasing an alignment report.
+#define RAIN_ESP_DIAG 0
+
 #define LOG_TAG "Rain"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
@@ -380,6 +384,41 @@ void DrawUnit(const DrawCtx& ctx, const game::Entity& e, EspCat cat_id,
     box_w *= g_cfg.esp_box_scale;
     box_h *= g_cfg.esp_box_scale;
     if (box_h < 8.0f) box_h = 8.0f;
+    // A single unit can never be taller than the screen: a larger span means
+    // one of the two projected points landed near the near plane (projection
+    // explosion). Skip rather than draw a screen-filling rectangle.
+    if (box_h > ctx.sh * 2.0f) return;
+
+#if RAIN_ESP_DIAG
+    // Calibration line (ESP-offset hunt): position source, which projector
+    // produced each point, both raw projections, and the camera state from both
+    // sources. Heroes are sampled every 300 draws; head-projection failures
+    // are sampled separately because they change the box height fallback.
+    {
+        const bool hero_cat = (cat_id == CAT_SELF || cat_id == CAT_ALLY_HERO ||
+                               cat_id == CAT_ENEMY_HERO);
+        static int diag = 0;
+        static int headfail = 0;
+        const bool sample = hero_cat && (++diag % 300 == 0);
+        const bool headfail_sample = !have_head && (++headfail % 240 == 0);
+        if (sample || headfail_sample) {
+            char cam[256];
+            game::DiagCameraLine(cam, sizeof(cam));
+            char selfbuf[80];
+            if (ctx.self)
+                snprintf(selfbuf, sizeof(selfbuf), "self=(%.1f,%.1f,%.1f)u%d",
+                         ctx.self->x, ctx.self->y, ctx.self->z,
+                         ctx.self->pos_is_unity ? 1 : 0);
+            else
+                snprintf(selfbuf, sizeof(selfbuf), "self=none");
+            LOGI("espdiag cat=%d id=%d guid=%u u%d proj=%d pos=(%.2f,%.2f,%.2f) "
+                 "feet=(%.0f,%.0f) headok=%d head=(%.0f,%.0f) h=%.1f dist=%.1f %s | %s",
+                 static_cast<int>(cat_id), e.id, e.guid, e.pos_is_unity ? 1 : 0,
+                 game::LastProjector(), e.x, e.y, e.z, sx, sy,
+                 have_head ? 1 : 0, hx, hy, box_h, dist, selfbuf, cam);
+        }
+    }
+#endif
 
     const float x0 = sx - box_w * 0.5f;
     const float y0 = have_head ? (hy < sy ? hy : sy) : sy - box_h;
